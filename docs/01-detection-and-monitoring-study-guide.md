@@ -1,5 +1,13 @@
 # AWS Security Specialty SCS-C03 Detection Study Guide
 
+Beginner links for this topic:
+
+- [CloudTrail](00-aws-security-foundations-for-beginners.md#cloudtrail), [CloudTrail Lake](00-aws-security-foundations-for-beginners.md#cloudtrail-lake), [CloudWatch](00-aws-security-foundations-for-beginners.md#cloudwatch)
+- [VPC Flow Logs](00-aws-security-foundations-for-beginners.md#vpc-flow-logs), [Route 53 Resolver Query Logs](00-aws-security-foundations-for-beginners.md#route-53-resolver-query-logs)
+- [GuardDuty](00-aws-security-foundations-for-beginners.md#guardduty), [Security Hub](00-aws-security-foundations-for-beginners.md#security-hub), [Detective](00-aws-security-foundations-for-beginners.md#detective), [Security Lake](00-aws-security-foundations-for-beginners.md#security-lake)
+- [Macie](00-aws-security-foundations-for-beginners.md#macie), [Inspector](00-aws-security-foundations-for-beginners.md#inspector), [IAM Access Analyzer](00-aws-security-foundations-for-beginners.md#iam-access-analyzer), [AWS Config](00-aws-security-foundations-for-beginners.md#aws-config)
+- [EventBridge, SNS, SQS, and Lambda Together](00-aws-security-foundations-for-beginners.md#eventbridge-sns-sqs-and-lambda-together), [Athena vs Logs Insights vs CloudTrail Lake](00-aws-security-foundations-for-beginners.md#athena-cloudwatch-logs-insights-and-cloudtrail-lake), [CloudTrail Insights](00-aws-security-foundations-for-beginners.md#cloudtrail-insights), [OpenSearch Security Analytics](00-aws-security-foundations-for-beginners.md#opensearch-security-analytics)
+
 Generated: 2026-10-06
 
 This guide is exam-focused. It is based on the question bank and topic signals collected in this workspace, not on copied real exam questions or dumps.

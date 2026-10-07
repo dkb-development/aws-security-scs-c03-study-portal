@@ -1,5 +1,13 @@
 # AWS Security Specialty SCS-C03 Incident Response Study Guide
 
+Beginner links for this topic:
+
+- [GuardDuty](00-aws-security-foundations-for-beginners.md#guardduty), [EventBridge](00-aws-security-foundations-for-beginners.md#eventbridge), [Lambda](00-aws-security-foundations-for-beginners.md#lambda), [Step Functions](00-aws-security-foundations-for-beginners.md#step-functions)
+- [Systems Manager Automation](00-aws-security-foundations-for-beginners.md#systems-manager-automation), [Session Manager](00-aws-security-foundations-for-beginners.md#session-manager)
+- [CloudTrail](00-aws-security-foundations-for-beginners.md#cloudtrail), [VPC Flow Logs](00-aws-security-foundations-for-beginners.md#vpc-flow-logs), [Detective](00-aws-security-foundations-for-beginners.md#detective)
+- [Access Keys](00-aws-security-foundations-for-beginners.md#access-keys), [STS](00-aws-security-foundations-for-beginners.md#sts), [EC2 Quarantine](00-aws-security-foundations-for-beginners.md#ec2-quarantine), [EBS Snapshot and AMI](00-aws-security-foundations-for-beginners.md#ebs-snapshot-and-ami), [S3 Object Lock](00-aws-security-foundations-for-beginners.md#s3-object-lock)
+- [AWS Security Incident Response](00-aws-security-foundations-for-beginners.md#aws-security-incident-response), [OpsCenter and Incident Manager](00-aws-security-foundations-for-beginners.md#opscenter-and-incident-manager), [AWS Fault Injection Service, Resilience Hub, and ARC](00-aws-security-foundations-for-beginners.md#aws-fault-injection-service-resilience-hub-and-arc), [EventBridge, SNS, SQS, and Lambda Together](00-aws-security-foundations-for-beginners.md#eventbridge-sns-sqs-and-lambda-together)
+
 Generated: 2026-10-06
 
 This guide is exam-focused. It is based on the question bank and topic signals collected in this workspace, official AWS documentation, and original synthesis. It does not contain copied real exam questions, paid course content, or dumps.

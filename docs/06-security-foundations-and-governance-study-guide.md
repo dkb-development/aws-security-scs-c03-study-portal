@@ -1,5 +1,13 @@
 # AWS Security Specialty SCS-C03 Security Foundations and Governance Study Guide
 
+Beginner links for this topic:
+
+- [AWS Account](00-aws-security-foundations-for-beginners.md#aws-account), [Region and Availability Zone](00-aws-security-foundations-for-beginners.md#region-and-availability-zone), [ARN](00-aws-security-foundations-for-beginners.md#arn), [Tags](00-aws-security-foundations-for-beginners.md#tags)
+- [AWS Organizations](00-aws-security-foundations-for-beginners.md#aws-organizations), [Organizational Unit](00-aws-security-foundations-for-beginners.md#organizational-unit), [Delegated Administrator](00-aws-security-foundations-for-beginners.md#delegated-administrator), [SCP](00-aws-security-foundations-for-beginners.md#scp), [RCP](00-aws-security-foundations-for-beginners.md#rcp)
+- [Control Tower](00-aws-security-foundations-for-beginners.md#control-tower), [AWS Config](00-aws-security-foundations-for-beginners.md#aws-config), [Conformance Pack](00-aws-security-foundations-for-beginners.md#conformance-pack), [Firewall Manager](00-aws-security-foundations-for-beginners.md#firewall-manager)
+- [AWS Artifact](00-aws-security-foundations-for-beginners.md#aws-artifact), [AWS Audit Manager](00-aws-security-foundations-for-beginners.md#aws-audit-manager), [AWS Service Catalog](00-aws-security-foundations-for-beginners.md#aws-service-catalog), [AWS RAM](00-aws-security-foundations-for-beginners.md#aws-ram), [CloudFormation Guard](00-aws-security-foundations-for-beginners.md#cloudformation-guard), [Well-Architected Tool](00-aws-security-foundations-for-beginners.md#well-architected-tool)
+- [Management Account and Centralized Root Access](00-aws-security-foundations-for-beginners.md#management-account-and-centralized-root-access), [Declarative, Tag, and AI Opt-Out Policies](00-aws-security-foundations-for-beginners.md#declarative-policies-tag-policies-and-ai-services-opt-out-policies), [Config Aggregator and Remediation](00-aws-security-foundations-for-beginners.md#config-aggregator-remediation-and-conformance-packs), [StackSets, Guard, cfn-lint, and Hooks](00-aws-security-foundations-for-beginners.md#stacksets-cloudformation-guard-cfn-lint-and-hooks), [Control Tower Control Types](00-aws-security-foundations-for-beginners.md#control-tower-controls-preventive-detective-proactive), [Firewall Manager, RAM, and Service Catalog](00-aws-security-foundations-for-beginners.md#firewall-manager-ram-and-service-catalog-in-one-picture)
+
 Generated: 2026-10-06
 
 This guide is exam-focused. It is based on the question bank and topic signals collected in this workspace, official AWS documentation, and original synthesis. It does not contain copied real exam questions, paid course content, or dumps.

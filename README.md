@@ -19,7 +19,7 @@ https://aws-security-scs-c03-practice.technicaldwiti.chatgpt.site
 - Collapsible study material and question-bank sections per topic.
 - Immediate answer reveal with explanations after each attempted question.
 - Bookmarking, progress tracking, search, and JSON import/export.
-- Markdown study guides and question/concept files in `docs/`.
+- Markdown study guides, beginner foundations, and question/concept files in `docs/`.
 
 ## Important Files
 
@@ -30,8 +30,9 @@ https://aws-security-scs-c03-practice.technicaldwiti.chatgpt.site
 
 ## Study Guide Order
 
-Read the numbered study guide files in this order:
+If you are new to the AWS security services, start with the foundation guide first. If you already know the basics, jump directly into `01`.
 
+0. `docs/00-aws-security-foundations-for-beginners.md`
 1. `docs/01-detection-and-monitoring-study-guide.md`
 2. `docs/02-incident-response-study-guide.md`
 3. `docs/03-infrastructure-security-study-guide.md`

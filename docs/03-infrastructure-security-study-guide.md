@@ -1,5 +1,14 @@
 # AWS Security Specialty SCS-C03 Infrastructure Security Study Guide
 
+Beginner links for this topic:
+
+- [VPC](00-aws-security-foundations-for-beginners.md#vpc), [Security Group](00-aws-security-foundations-for-beginners.md#security-group), [Network ACL](00-aws-security-foundations-for-beginners.md#network-acl), [Route Table](00-aws-security-foundations-for-beginners.md#route-table)
+- [NAT Gateway](00-aws-security-foundations-for-beginners.md#nat-gateway), [Internet Gateway](00-aws-security-foundations-for-beginners.md#internet-gateway), [VPC Endpoint](00-aws-security-foundations-for-beginners.md#vpc-endpoint), [PrivateLink](00-aws-security-foundations-for-beginners.md#privatelink)
+- [Transit Gateway](00-aws-security-foundations-for-beginners.md#transit-gateway), [Direct Connect and VPN](00-aws-security-foundations-for-beginners.md#direct-connect-and-vpn)
+- [AWS Network Firewall](00-aws-security-foundations-for-beginners.md#aws-network-firewall), [Route 53 Resolver DNS Firewall](00-aws-security-foundations-for-beginners.md#route-53-resolver-dns-firewall), [AWS WAF](00-aws-security-foundations-for-beginners.md#aws-waf), [AWS Shield](00-aws-security-foundations-for-beginners.md#aws-shield)
+- [CloudFront Origin Access Control](00-aws-security-foundations-for-beginners.md#cloudfront-origin-access-control), [API Gateway Mutual TLS](00-aws-security-foundations-for-beginners.md#api-gateway-mutual-tls), [Verified Access](00-aws-security-foundations-for-beginners.md#verified-access), [Inspector](00-aws-security-foundations-for-beginners.md#inspector)
+- [VPC Traffic Mirroring](00-aws-security-foundations-for-beginners.md#vpc-traffic-mirroring), [VPC Network Access Analyzer](00-aws-security-foundations-for-beginners.md#vpc-network-access-analyzer), [EC2 Image Builder, Patch Manager, and IMDSv2](00-aws-security-foundations-for-beginners.md#ec2-image-builder-patch-manager-and-imdsv2), [Amazon Bedrock Guardrails](00-aws-security-foundations-for-beginners.md#amazon-bedrock-guardrails), [Amazon Q Developer and Inspector SBOM](00-aws-security-foundations-for-beginners.md#amazon-q-developer-code-scanning-and-inspector-sbom)
+
 Generated: 2026-10-06
 
 This guide is exam-focused. It is based on the question bank and topic signals collected in this workspace, official AWS documentation, and original synthesis. It does not contain copied real exam questions, paid course content, or dumps.

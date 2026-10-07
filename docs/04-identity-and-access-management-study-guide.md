@@ -1,5 +1,13 @@
 # AWS Security Specialty SCS-C03 Identity And Access Management Study Guide
 
+Beginner links for this topic:
+
+- [IAM](00-aws-security-foundations-for-beginners.md#iam), [Principal Action Resource Condition](00-aws-security-foundations-for-beginners.md#principal-action-resource-condition), [Default Deny Explicit Allow Explicit Deny](00-aws-security-foundations-for-beginners.md#default-deny-explicit-allow-explicit-deny)
+- [Identity-Based Policy](00-aws-security-foundations-for-beginners.md#identity-based-policy), [Resource-Based Policy](00-aws-security-foundations-for-beginners.md#resource-based-policy), [IAM Role](00-aws-security-foundations-for-beginners.md#iam-role), [Trust Policy](00-aws-security-foundations-for-beginners.md#trust-policy), [STS](00-aws-security-foundations-for-beginners.md#sts)
+- [Permissions Boundary](00-aws-security-foundations-for-beginners.md#permissions-boundary), [Session Policy](00-aws-security-foundations-for-beginners.md#session-policy), [SCP](00-aws-security-foundations-for-beginners.md#scp), [RCP](00-aws-security-foundations-for-beginners.md#rcp)
+- [IAM Identity Center](00-aws-security-foundations-for-beginners.md#iam-identity-center), [Amazon Cognito](00-aws-security-foundations-for-beginners.md#amazon-cognito), [Amazon Verified Permissions](00-aws-security-foundations-for-beginners.md#amazon-verified-permissions), [ABAC](00-aws-security-foundations-for-beginners.md#abac), [External ID](00-aws-security-foundations-for-beginners.md#external-id), [IAM Access Analyzer](00-aws-security-foundations-for-beginners.md#iam-access-analyzer)
+- [IAM Roles Anywhere](00-aws-security-foundations-for-beginners.md#iam-roles-anywhere), [Session Tags and Revoking Role Sessions](00-aws-security-foundations-for-beginners.md#session-tags-and-revoking-role-sessions), [S3 Presigned URLs](00-aws-security-foundations-for-beginners.md#s3-presigned-urls), [Directory Service, AD Connector, and AWS Managed Microsoft AD](00-aws-security-foundations-for-beginners.md#directory-service-ad-connector-and-aws-managed-microsoft-ad)
+
 Generated: 2026-10-06
 
 This guide is exam-focused. It is based on the question bank and topic signals collected in this workspace, official AWS documentation, and original synthesis. It does not contain copied real exam questions, paid course content, or dumps.

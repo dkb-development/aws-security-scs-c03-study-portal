@@ -1,5 +1,13 @@
 # AWS Security Specialty SCS-C03 Data Protection Study Guide
 
+Beginner links for this topic:
+
+- [KMS](00-aws-security-foundations-for-beginners.md#kms), [KMS Key Policy](00-aws-security-foundations-for-beginners.md#kms-key-policy), [KMS Grant](00-aws-security-foundations-for-beginners.md#kms-grant), [Envelope Encryption](00-aws-security-foundations-for-beginners.md#envelope-encryption), [Multi-Region KMS Key](00-aws-security-foundations-for-beginners.md#multi-region-kms-key)
+- [Imported Key Material](00-aws-security-foundations-for-beginners.md#imported-key-material), [CloudHSM and Custom Key Store](00-aws-security-foundations-for-beginners.md#cloudhsm-and-custom-key-store)
+- [S3 Encryption](00-aws-security-foundations-for-beginners.md#s3-encryption), [S3 Bucket Policy](00-aws-security-foundations-for-beginners.md#s3-bucket-policy), [S3 Block Public Access](00-aws-security-foundations-for-beginners.md#s3-block-public-access), [S3 Object Lock](00-aws-security-foundations-for-beginners.md#s3-object-lock)
+- [Macie](00-aws-security-foundations-for-beginners.md#macie), [Secrets Manager](00-aws-security-foundations-for-beginners.md#secrets-manager), [Parameter Store](00-aws-security-foundations-for-beginners.md#parameter-store), [ACM](00-aws-security-foundations-for-beginners.md#acm), [AWS Private CA](00-aws-security-foundations-for-beginners.md#aws-private-ca), [TLS and mTLS](00-aws-security-foundations-for-beginners.md#tls-and-mtls), [AWS Backup](00-aws-security-foundations-for-beginners.md#aws-backup)
+- [KMS Condition Keys](00-aws-security-foundations-for-beginners.md#kms-condition-keys-kmsviaservice-and-kmsgrantisforawsresource), [S3 Bucket Keys](00-aws-security-foundations-for-beginners.md#s3-bucket-keys), [CloudWatch Logs Data Protection](00-aws-security-foundations-for-beginners.md#cloudwatch-logs-data-protection), [SNS Message Data Protection](00-aws-security-foundations-for-beginners.md#sns-message-data-protection), [CloudFront Field-Level Encryption](00-aws-security-foundations-for-beginners.md#cloudfront-field-level-encryption), [Data in Transit and SageMaker](00-aws-security-foundations-for-beginners.md#data-in-transit-nitro-emr-eks-and-sagemaker), [Data Lifecycle Manager](00-aws-security-foundations-for-beginners.md#amazon-data-lifecycle-manager), [S3 Access Grants](00-aws-security-foundations-for-beginners.md#s3-access-grants), [Glacier Vault Lock](00-aws-security-foundations-for-beginners.md#s3-glacier-vault-lock)
+
 Generated: 2026-10-06
 
 This guide is exam-focused. It is based on the question bank and topic signals collected in this workspace, official AWS documentation, and original synthesis. It does not contain copied real exam questions, paid course content, or dumps.
