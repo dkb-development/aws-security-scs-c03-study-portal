@@ -14,20 +14,20 @@ The initial review inspected the structure, foundation links, representative tea
 
 | File/topic | Current status | Next work |
 | --- | --- | --- |
-| 00 Foundations | Detection services and underlying mechanisms expanded | Expand remaining domains alongside their chapter passes |
+| 00 Foundations | Expanded alongside all six domain passes | Connected lesson navigation, mechanisms, diagrams, examples, and return links; short lookup entries retained |
 | 01 Detection | Rewritten and checked against all 13 Domain 1 skills | Reader review and refinements |
 | 02 Incident Response | Detailed expansion complete | Guided lessons, six scenario workshops, nine-skill map, evidence/response foundations; reader refinements remain welcome |
 | 03 Infrastructure Security | Detailed expansion complete | Packet-path lessons, six workshops, objective map, private/edge/device foundations and service-lifecycle corrections |
 | 04 IAM | Detailed expansion complete | Request-path teaching, six workshops, eight-skill map, federation foundations, corrected S3 ABAC and resource-policy exceptions |
 | 05 Data Protection | Detailed expansion complete | Data/key teaching path, six workshops, twelve-skill map, certificate/secret foundations, current imported-key rotation and ACM distinctions |
-| 06 Governance | Preliminary review only | Explain policy inheritance/scope, enrollment, control implementation, drift/remediation and audit-evidence limits |
+| 06 Governance | Detailed expansion complete | Control lifecycle lessons, six workshops, twelve-skill map, policy/evidence foundations and scope/availability corrections |
 
 ## Findings From The Initial Review
 
 - Detection repeated service descriptions while lacking meaningful implementation/troubleshooting coverage. Missing areas included agent setup, alarm evaluation, log delivery permissions, validation/retention, transit gateway evidence, and reliable alert delivery.
 - Many "worked examples" identified a service from one clue without explaining competing designs or failure conditions. The revised chapter includes longer original scenarios and explanations for each option.
-- Most foundation links were concentrated at the start of chapters. Existing link targets were valid, but inline navigation was sparse. Topic 1 now links at the point of use; the same pass is still required in Topics 2-6.
-- Foundation sections had uneven depth. Detection sections now explain processes, prerequisites, limitations, diagrams, and return paths. Unreviewed sections are not being represented as complete beginner lessons.
+- Most foundation links were concentrated at the start of chapters. The six expanded teaching paths now add point-of-use foundation links and return navigation; older lookup/practice sections remain available.
+- Foundation sections had uneven depth. Connected lessons now explain the underlying mechanisms across all six domains, with examples, diagrams, and return paths. Short lookup entries are retained rather than represented as complete standalone lessons.
 - Current AWS documentation contradicts blanket CloudTrail Lake recommendations: new customers cannot enroll after May 31, 2026. The revised Detection/foundations content states the constraint.
 - Security Hub CSPM and current Security Hub need distinct treatment, including ASFF versus OCSF and behavior-investigation versus exposure-graph capabilities.
 - The old EventBridge exact severity list `[7, 8, 9]` was not a general threshold. The new example uses a numeric comparison and explains fractional values.
@@ -56,6 +56,14 @@ The initial review inspected the structure, foundation links, representative tea
 Added: Config/State Manager assessment mechanics, central archive security, detailed agent setup, missing-data reasoning, TGW logging, application logging failure paths, scoped lake subscribers, health checks, coverage verification and a complete company design.
 
 ## Sources And Verification
+
+### Completion Of Sequential Domain Passes
+
+Completed 2026-10-10. Topics 2-6 retain their existing reference and practice content while adding connected teaching paths, original multi-constraint workshops, inline foundations, and official-skill coverage maps. Each domain was validated, committed, and pushed before moving to the next.
+
+Substantive corrections include IAM resource-policy exceptions and S3 object-tag condition keys; imported symmetric KMS key on-demand rotation and ACM exportable certificates; Config aggregation/remediation scope; and organization-policy/control enforcement boundaries. The strategy now records these recurring factual and coverage checks.
+
+Residual scope: this pass is not a line-by-line revalidation of every historical question-bank answer. Those older banks need reconciliation before the complete portal is republished. Source/JSON/link validation is not an AWS deployment test or a rendered mobile/website review.
 
 ### Readability Pass
 

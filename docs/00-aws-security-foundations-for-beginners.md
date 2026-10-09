@@ -4,7 +4,7 @@ Use this file when a study guide mentions an AWS service or security concept and
 
 The six numbered study guides are still the exam-focused material. This file is the beginner support layer behind them.
 
-Review status, 2026-10-09: the Detection foundations have received a deeper teaching pass. Foundations for Topics 2-6 will be expanded alongside their individual chapter reviews; this is not yet a completed review of every concept in this file.
+Review status, 2026-10-10: all six domain passes now include expanded foundation lessons. Short service definitions remain as lookup entries; use the connected lessons below for mechanisms, examples, and limitations. This is a study-resource review, not a guarantee of every possible exam question or a deployment-tested configuration manual.
 
 For Topic 1, begin with [the detection pipeline](#detection-pipeline-from-first-principles), [logs versus metrics](#logs-metrics-and-alarms-explained), [delivery permissions](#log-delivery-permissions-step-by-step), and [network evidence](#dns-and-network-evidence-explained). Then use the service-specific sections below.
 
@@ -33,6 +33,17 @@ This foundation guide = what the AWS thing is in the first place
 | Why accepted traffic can still fail | [DNS and network evidence](#dns-and-network-evidence-explained) |
 | Why a delivered event can still fail | [Retries and duplicate handling](#reliable-events-and-duplicate-handling) |
 | How to maintain monitoring configuration | [Regular assessments](#regular-assessments-and-state-manager) |
+
+### Connected Lessons For Every Topic
+
+| Topic | Start with these beginner lessons |
+| --- | --- |
+| 1. Detection | [Evidence pipeline](#detection-pipeline-from-first-principles), [metrics and alarms](#logs-metrics-and-alarms-explained) |
+| 2. Incident Response | [Access and evidence](#response-access-and-evidence-basics), [automation and recovery](#response-automation-and-safe-recovery) |
+| 3. Infrastructure | [Packet paths](#packet-paths-and-inspection-basics), [edge, browser, and device controls](#edge-browser-and-device-basics) |
+| 4. IAM | [Roles and requests](#roles-sessions-and-policy-requests), [tokens and attribute ownership](#federation-tokens-and-attribute-ownership) |
+| 5. Data Protection | [Encryption and key lifetime](#encryption-and-key-lifetimes-from-first-principles), [certificates, secrets, and recovery](#certificates-secrets-and-recovery-explained) |
+| 6. Governance | [Account and policy boundaries](#account-boundaries-and-policy-inheritance-explained), [control lifecycle and evidence](#governance-controls-and-evidence-from-first-principles) |
 
 ### All Foundation Areas
 
@@ -2368,12 +2379,98 @@ Use it when the question is about:
 - best-practice assessment
 - identifying improvement plans
 
+### Account Boundaries And Policy Inheritance Explained
+
+**Start with a team problem:** developers need freedom to experiment, but their experiments must not delete production records or erase audit logs. Separate accounts create ownership boundaries. Organizations lets a central team manage those accounts together without turning them into one shared account.
+
+An organization **root** is the top container in the account hierarchy. An account **root user** is that account's privileged identity. These names sound alike but describe completely different things.
+
+```text
+Organization root
+    |
+    +-- Production OU -> account 1111 -> its identities/resources
+    +-- Sandbox OU    -> account 2222 -> its identities/resources
+
+An OU groups accounts. It is not a VPC or an IAM login group.
+```
+
+**Inheritance** means an account receives relevant policies from the containers above it as well as its direct attachments. A restrictive ancestor can prevent a permission even when an administrator inside the account wants to allow it.
+
+Example: a Production SCP denies disabling a security trail. The application account's administrator role has a broad Allow. The explicit organizational deny still blocks the covered principal's attempt. Adding another account policy with Allow does not cancel that restriction.
+
+The policy's **scope** matters. SCPs restrict covered member-account identities; RCPs restrict access to supported member-account resources. Neither grants access. The management account has different treatment, which is a reason to protect it especially carefully and avoid routine workloads there.
+
+```text
+Member identity -> requested action -> SCP-side limits
+Requested resource in member account -> RCP-side limits
+                    |
+           ordinary permissions still needed
+```
+
+These arrows describe evaluation relationships, not an actual sequence of API calls. Service-linked roles and other documented exceptions matter; no diagram replaces the service-specific scope check.
+
+**Real deployment:** the platform team moves a test account into a new OU, checks expected allowed and denied operations, and inspects any failed service integrations. Only then does it expand the rollout. This catches an overbroad deny before dozens of production accounts inherit it.
+
+A delegated administrator runs a supported service's organization functions from a member account. It is not the owner of every resource in every account. Delegation, service enrollment, Region selection, and feature enablement are separate things to verify.
+
+[Return to account design](06-security-foundations-and-governance-study-guide.md#a-design-accounts-around-security-boundaries) or [organization policies](06-security-foundations-and-governance-study-guide.md#b-understand-what-organization-policies-actually-control).
+
+### Governance Controls And Evidence From First Principles
+
+A **control** is a repeatable measure used to meet a requirement. "No public administrative access" is a requirement. A policy preventing unsafe changes, a rule checking configuration, and a runbook fixing violations are different controls that support it.
+
+**Drift** is a difference between the intended configuration and actual configuration. Someone might change a security group manually after an approved deployment. A template stored in Git shows intent; it does not prove the running resource still matches.
+
+```text
+Requirement -> approved design -> deployment
+                                   |
+                              observed state
+                                   |
+                          compare with requirement
+                                   |
+                         correct / approve exception
+                                   |
+                            verify and retain evidence
+```
+
+#### Prevention, Detection, And Correction
+
+Prevention blocks an operation through a particular enforcement point. Detection reports an observed violation. Remediation changes the resource to correct it. A Config finding does not rewind time and prevent the original change from happening.
+
+**Example:** a template policy check rejects public SSH in CI. A developer who can bypass CI might still create it directly. A suitable API-level or service-level control can prevent that path; a Config rule can detect unexpected remaining gaps.
+
+An **aggregator** gathers observations from other accounts. Think of a central view of reports, not a device that installs sensors in every account. Recording must be configured in the sources, and the supported rules must evaluate the relevant resources.
+
+```text
+Account A recorder + rules --+
+                             +--> aggregate view
+Account B recorder + rules --+
+
+Account C without recording -> missing evidence, not a pass
+```
+
+#### Safe Correction
+
+A finding describes a state observed at a time. The resource may have changed before a runbook acts. Re-read current state, change only what is necessary, and verify the result. An idempotent action behaves safely when repeated instead of compounding changes.
+
+For example, remove a particular unauthorized SSH rule if it still exists. Do not replace every security-group rule using an old snapshot without checking that doing so is appropriate. Define permissions, approval needs, retry limits, and an owner for failure handling.
+
+#### What Counts As Evidence?
+
+Evidence demonstrates that a control operated: a timestamped evaluation, a successful or blocked test, an approved exception, or an audited remediation execution. It needs a scope: which accounts, Regions, resources, and period does it cover?
+
+AWS Artifact supplies AWS-side reports. Audit Manager organizes customer assessment evidence. Neither makes a missing customer control exist. A human must review whether the evidence actually addresses the requirement.
+
+**Example:** a report that one test bucket is private does not establish that every production bucket was private throughout the quarter. Compare inventory to coverage, examine changes over time, and record gaps honestly.
+
+[Return to deployment](06-security-foundations-and-governance-study-guide.md#c-make-secure-deployment-repeatable), [remediation](06-security-foundations-and-governance-study-guide.md#d-close-the-loop-from-observation-to-remediation), or [audit evidence](06-security-foundations-and-governance-study-guide.md#e-prove-controls-with-evidence-not-service-names).
+
 ## 8. Common "Which Service?" Memory Table
 
 | If the question says... | Think first |
 | --- | --- |
 | Who made this API call? | CloudTrail |
-| Query historical API activity with SQL | CloudTrail Lake |
+| Query historical API activity with SQL | Athena over stored S3 logs; CloudTrail Lake for eligible existing customers |
 | Network traffic metadata | VPC Flow Logs |
 | DNS query visibility | Route 53 Resolver query logs |
 | Managed threat finding | GuardDuty |

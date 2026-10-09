@@ -16,6 +16,344 @@ Use it as a reverse-engineered study path: learn the governance patterns that ap
 
 ---
 
+## Guided Learning Path
+
+Reviewed: 2026-10-10. Learn the control lifecycle here before using the retained component reference and revision questions. A community mention count is not an exam-weight measurement; the official objectives determine coverage.
+
+| Reading pass | The question you should be able to answer |
+| --- | --- |
+| [A: Accounts and ownership](#a-design-accounts-around-security-boundaries) | Who owns, administers, and audits the environment? |
+| [B: Organization policies](#b-understand-what-organization-policies-actually-control) | Which rule applies to this caller or resource? |
+| [C: Governed deployment](#c-make-secure-deployment-repeatable) | How do approved configurations reach every account? |
+| [D: Compliance operations](#d-close-the-loop-from-observation-to-remediation) | How do you detect, fix, and verify drift safely? |
+| [E: Evidence and review](#e-prove-controls-with-evidence-not-service-names) | What proves the control operated over the required scope? |
+| [F: Scenario workshop](#f-governance-scenario-workshop) | Choose controls without confusing their roles |
+
+## A. Design Accounts Around Security Boundaries
+
+### Why Not Put Everything In One Account?
+
+An [AWS account](00-aws-security-foundations-for-beginners.md#aws-account) is an important ownership and permission boundary. Separating production from development reduces the chance that experimental permissions or cleanup scripts affect production. Centralizing security evidence in a separate account makes it harder for a compromised application administrator to erase that evidence.
+
+```text
+Organization root (a policy container, not a root user)
+    |
+    +-- Security OU
+    |      +-- Log archive account
+    |      +-- Security operations account
+    |
+    +-- Workloads OU
+           +-- Production accounts
+           +-- Development accounts
+
+Management account: organization administration and billing
+```
+
+An [OU](00-aws-security-foundations-for-beginners.md#organizational-unit) groups accounts for management and inherited policies. It does not create network connections, share resources, or grant employees login access. Moving an account between OUs can immediately change its applicable restrictions, so treat the move as a security change.
+
+**Example:** the security account administers GuardDuty, while the log archive owns retained logs. Investigators receive controlled read access. Application roles can deliver evidence but cannot delete the archive. This separates monitoring administration, evidence ownership, and workload operation.
+
+### Management Is Not Daily Security Operations
+
+Protect the management account because SCPs do not restrict its identities. Do not put ordinary workloads there merely because it is convenient. An administrator role in a member account remains subject to applicable organization restrictions; a delegated administrator account does not become a second management account.
+
+[Delegated administration](00-aws-security-foundations-for-beginners.md#delegated-administrator) is service-specific. Enabling trusted access lets a supported service integrate with Organizations; designating a delegated administrator assigns supported organization-management responsibilities for that service. Neither gives that account universal administrator access to everything.
+
+Verify enrollment, supported Regions, enabled features, existing members, and automatic enrollment of new accounts. A successfully registered administrator with no member coverage is not a completed organization deployment.
+
+### Root Access And Emergency Access
+
+Human administrators normally use federated roles and MFA. Root access is for exceptional tasks. Centralized root access can remove member-account root credentials and provide scoped privileged operations through authorized central identities. It does not eliminate the need to secure the management account's root identity.
+
+```text
+Normal work -> workforce sign-in -> bounded admin role
+Rare emergency -> independent recovery procedure
+Root-only task -> supported scoped root session or controlled recovery
+```
+
+Some tasks still require recovering member-account root credentials. Define approval, email-account custody, logging, and removal of those credentials afterward. A break-glass procedure must remain usable when the normal identity provider is unavailable and must not become an unmonitored permanent administrator shortcut. [Central root capabilities and limits](https://docs.aws.amazon.com/IAM/latest/UserGuide/id_root-enable-root-access.html).
+
+## B. Understand What Organization Policies Actually Control
+
+### Trace Inheritance Before Editing IAM
+
+An SCP sets permission limits for covered member-account principals; it does not grant permissions. In an allow-list design, the needed action must remain allowed at every level along the path from organization root to account. An explicit deny at an ancestor cannot be canceled by an Allow below it.
+
+```text
+Root: permits S3 and EC2
+    |
+Prod OU: permits S3 only
+    |
+Account: permits S3 and EC2
+    |
+IAM role: allows EC2 start
+    |
+Result: EC2 start still blocked by the OU-level limit
+```
+
+Policies attached at one level contribute to that level's evaluation; do not imagine that attaching a second Allow always overrides a Deny. Retaining FullAWSAccess plus selective denies is different from removing it to build allow lists. Test the effective hierarchy before a broad rollout. [SCP evaluation](https://docs.aws.amazon.com/organizations/latest/userguide/orgs_manage_policies_scps_evaluation.html).
+
+SCPs do not constrain outside principals simply because those principals access a bucket you own. They also do not constrain service-linked roles. The management-account and service-linked-role exceptions matter when selecting a control, not only when troubleshooting. [SCP scope](https://docs.aws.amazon.com/organizations/latest/userguide/orgs_manage_policies_scps.html).
+
+### Resource-Side Limits Solve A Different Problem
+
+An [RCP](00-aws-security-foundations-for-beginners.md#rcp) limits access to supported resources in member accounts, including requests from outside the organization. It can prevent an accidental resource-policy grant from exposing a covered resource. It still does not give legitimate users access by itself.
+
+```text
+External caller -> overly broad bucket policy -> S3 object
+                          |
+             applicable resource-side deny blocks access
+
+Member role -> external resource
+     |
+principal-side controls are relevant; your RCP is not
+attached to the external account's resource
+```
+
+Check current service/action support rather than memorizing a permanent short list. RCPs do not affect management-account resources, service-linked-role calls, or AWS managed KMS keys. A policy that protects one supported S3 operation is not proof it protects all data paths. [RCP scope and exceptions](https://docs.aws.amazon.com/organizations/latest/userguide/orgs_manage_policies_rcps.html).
+
+### Build Data Perimeters Without Breaking AWS Services
+
+A data perimeter combines trusted identities, trusted resources, and expected networks. Conditions such as `aws:PrincipalOrgID`, `aws:SourceOrgID`, `aws:SourceArn`, and `aws:SourceVpce` answer different questions. Not every key appears in every request context.
+
+For example, a log-delivery request from an AWS service may not look like a workforce role session in your organization. A blanket deny on a missing principal-organization key can break legitimate delivery. Use supported service-specific source conditions and appropriate service-principal exceptions, then test both delivery and hostile access.
+
+Region controls also need care. `aws:RequestedRegion` concerns the endpoint handling a request, not a universal guarantee about every downstream data movement. Account for global services and operations with cross-Region effects; restricting a Region is not a complete data-residency architecture.
+
+### Configuration Policies Are Not Permission Grants
+
+[Declarative policies](00-aws-security-foundations-for-beginners.md#declarative-policies-tag-policies-and-ai-services-opt-out-policies) express supported service configuration at organization scale. They differ from enumerating forbidden API calls. Inspect the effective policy, supported attributes, inheritance, and the effect of detaching the policy. [Declarative policy mechanics](https://docs.aws.amazon.com/organizations/latest/userguide/orgs_manage_policies_declarative_policies.html).
+
+Tag policies standardize defined tag keys, case, and values, with enforcement for supported resource types. They do not universally require every resource to have a tag. For mandatory tags, combine suitable creation-time controls with detection/remediation for supported actions and resources. [Tag policy scope](https://docs.aws.amazon.com/organizations/latest/userguide/orgs_manage_policies_tag-policies.html).
+
+**Example:** `Environment=Production` supports inventory and policy selection. It does not make a resource production-secure by itself. If access or firewall scope depends on a tag, restrict who can remove or change it. AI services opt-out policies address supported service data-use preferences, not a universal network block or a substitute for application data classification.
+
+## C. Make Secure Deployment Repeatable
+
+### Start With A Governed Account
+
+[Control Tower](00-aws-security-foundations-for-beginners.md#control-tower) helps establish a landing zone: a managed multi-account foundation with account provisioning and controls. Account Factory creates governed accounts; AFT supports Terraform-oriented account provisioning/customization workflows.
+
+Existing accounts need deliberate enrollment and prerequisite checks. Inventory conflicting resources/configuration, choose governed Regions, register/enroll the appropriate OUs/accounts, and verify baseline status. An account appearing in Organizations is not proof it is fully governed by Control Tower.
+
+### Three Control Behaviors
+
+| Behavior | What it does | Limitation to remember |
+| --- | --- | --- |
+| Preventive | Blocks prohibited changes through its mechanism | Scope depends on the policy/service implementation |
+| Proactive | Checks supported CloudFormation provisioning before creation | Does not protect every direct service API call |
+| Detective | Reports noncompliant observed configuration | The unwanted state may already exist |
+
+Preventive implementations include SCPs, RCPs, and declarative policies. Detective controls use Config; proactive controls use CloudFormation hooks. Guidance categories such as mandatory or elective are separate from behavior. [Control Tower control behavior](https://docs.aws.amazon.com/controltower/latest/controlreference/control-behavior.html).
+
+### Build Several Checkpoints, Each With A Job
+
+```text
+Template -> cfn-lint -> Guard rules -> reviewed change
+                                          |
+                                          v
+                              server-side provisioning checks
+                                          |
+                                          v
+                                deployed resource -> Config
+```
+
+`cfn-lint` validates CloudFormation template structure/specification and related checks. Guard evaluates policy rules against structured input. A pipeline must actually run Guard and fail on violations; a rule file in Git does nothing by itself.
+
+CloudFormation hooks provide server-side checks in their configured target scope. Control Tower proactive controls cover CloudFormation provisioning, not an engineer calling an unrelated service API directly. Add suitable IAM, organization, or service-native prevention for paths that bypass the pipeline.
+
+### StackSets: Deployment Is Not Instant Universality
+
+[StackSets](00-aws-security-foundations-for-beginners.md#stacksets-cloudformation-guard-cfn-lint-and-hooks) deploy a template to account/Region targets. A stack instance represents a target deployment, so inspect individual instance status, not just whether the StackSet exists.
+
+Service-managed permissions integrate with Organizations and require the appropriate trusted-access setup; self-managed permissions require execution/admin roles you arrange. Configure automatic deployment intentionally for OU membership changes, including whether resources are retained when accounts leave scope. [StackSet concepts](https://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/stacksets-concepts.html).
+
+Use a test OU, limited concurrency, failure tolerance, and a rollback plan. A missing role, blocked service, unavailable Region, quota, or conflicting existing resource can leave a partial rollout. Compare expected account/Region targets against successful stack instances.
+
+### Share Resources Without Transferring Ownership
+
+[RAM](00-aws-security-foundations-for-beginners.md#aws-ram) shares supported resources with specified principals using supported permissions. A networking account can share a subnet while retaining ownership of the network. The participant does not automatically receive full administrative control over the owner's resources. [RAM sharing model](https://docs.aws.amazon.com/ram/latest/userguide/what-is.html).
+
+Service Catalog instead presents approved products for self-service provisioning. A launch constraint can select a provisioning role so users do not need broad direct deployment rights. Scope that role and the product's allowed parameters: an approved template plus unrestricted privileged inputs can still create unsafe resources.
+
+Firewall Manager centrally applies supported security policies to selected accounts/resources. Confirm organization/admin prerequisites, required Config recording, Regional scope, resource/tag selection, and policy-specific dependencies. In-scope automatic remediation is a separate choice from merely creating a policy. [Firewall Manager prerequisites](https://docs.aws.amazon.com/waf/latest/developerguide/fms-prereq.html).
+
+## D. Close The Loop From Observation To Remediation
+
+### Config Needs A Source Of Observations
+
+[AWS Config](00-aws-security-foundations-for-beginners.md#aws-config) records supported configuration and evaluates rules. A recorder's scope, Region, and status determine what can be observed. The rule's trigger and resource scope determine when and what it evaluates.
+
+```text
+Resource changes -> recorder -> configuration item
+                                   |
+                            matching rule evaluates
+                                   |
+                   compliance result + timestamp + scope
+                                   |
+                central visibility / notification / remediation
+```
+
+An aggregator combines authorized configuration/compliance data from source accounts and Regions. It is a read-only view; it does not deploy recorders, rules, or remediation into those sources. A blank account may mean missing collection, not perfect compliance. [Config aggregation](https://docs.aws.amazon.com/config/latest/developerguide/aggregate-data.html).
+
+A conformance pack packages Config rules and optional remediation definitions. Deploying a pack is not equivalent to proving a regulatory standard is fully met. Check deployment results, rule applicability, recording coverage, and operational handling of findings.
+
+### Safe Remediation Rechecks Reality
+
+Suppose a rule reports public SSH. Before an automated runbook changes the security group, retrieve its current state, check resource ownership/exceptions, and decide whether the risky rule still exists. A human may already have repaired it.
+
+```text
+Finding -> inspect current resource -> still noncompliant?
+                                      |              |
+                                     no             yes
+                                      |              |
+                              record no-op     approval if needed
+                                                     |
+                                              scoped correction
+                                                     |
+                                              verify + re-evaluate
+```
+
+Config automatic remediation can start from stale compliance information. Design idempotent actions, bounded retries, least-privilege execution roles, and escalation for failures. Avoid an endless conflict where automation changes a resource and its owning deployment immediately changes it back. [Automatic-remediation behavior](https://docs.aws.amazon.com/config/latest/developerguide/setup-autoremediation.html).
+
+Notifications must reach someone who owns resolution. For an event-driven path, verify event matching, target permission, retry/dead-letter behavior, and final ticket or message delivery. A compliance status update without an operating response process is unfinished governance.
+
+### Use Security Hub Precisely
+
+Security Hub CSPM evaluates security posture using controls/standards and related findings. Current Security Hub has broader prioritization/exposure capabilities; the names should not be treated as identical product descriptions. Use [the Detection explanation](01-detection-and-monitoring-study-guide.md) for that distinction and underlying data paths.
+
+Central administration and aggregation require explicit account/Region/feature coverage. A green central dashboard can reflect missing members, disabled standards, suppressed findings, or delayed evaluation. Compare expected inventory and enabled controls before interpreting a score as evidence.
+
+## E. Prove Controls With Evidence, Not Service Names
+
+### Shared Responsibility Changes By Service
+
+AWS secures underlying cloud infrastructure. Your responsibilities depend on the service: for EC2, guest operating-system patching is yours; for a managed service, you still control data, identities, supported configuration, and application behavior. Outsourcing infrastructure operation does not outsource authorization decisions.
+
+For each requirement, document a control owner, scope, mechanism, test, evidence location, review interval, and exception process. This makes a control operational rather than a list of enabled products. See [control lifecycle foundations](00-aws-security-foundations-for-beginners.md#governance-controls-and-evidence-from-first-principles).
+
+Illustrative control register entry, not an AWS API payload:
+
+```json
+{
+  "control": "No public administrative SSH",
+  "scope": "Production accounts and approved Regions",
+  "owner": "Platform security",
+  "prevention": "Approved network provisioning controls",
+  "detection": "Scoped Config rule with current recording",
+  "response": "Recheck, approve where needed, remove unsafe rule",
+  "evidence": "Evaluation and remediation execution records",
+  "exception": "Named approver and expiration required"
+}
+```
+
+**Read the gap:** this entry still needs concrete policy/rule identifiers, actual account inventory, and test records in production. Its purpose is to show what service-selection answers often omit.
+
+### Artifact, Audit Manager, And Well-Architected
+
+[Artifact](00-aws-security-foundations-for-beginners.md#aws-artifact) supplies AWS-side compliance documents. Those reports do not prove your S3 permissions were correct last month. [Audit Manager](00-aws-security-foundations-for-beginners.md#aws-audit-manager) helps organize evidence for your assessments, including supported automated sources and manual evidence.
+
+An assessment needs correct scope, mapped controls, source configuration, and human review. Evidence collection is not automatic certification or legal approval. Missing data may indicate missing integration rather than a passing control. [Audit Manager purpose and limits](https://docs.aws.amazon.com/audit-manager/latest/userguide/what-is.html).
+
+The Well-Architected Tool structures architecture review and improvement tracking. It does not enforce network rules or replace an audit. A useful review identifies risks, assigns owners, prioritizes fixes, and records later verification.
+
+## F. Governance Scenario Workshop
+
+### Workshop 1: AdministratorAccess Cannot Restore An Action
+
+**Situation:** An account moves from Sandbox to Production. A previously working deployment loses EC2 access. Its role still has AdministratorAccess, but the Production OU's SCP allow list omits EC2.
+
+**Decision:** What should be changed or clarified first?
+
+- A. Review the intended OU-level allowance and its effective inheritance.
+- B. Attach AdministratorAccess a second time.
+- C. Add an account-level Allow and assume it overrides every ancestor.
+
+**Answer: A.** The permission ceiling changed during the move. B repeats a grant that cannot cross that ceiling. C cannot undo an ancestor's restriction. Confirm the business requirement, test any policy adjustment in limited scope, and retain the intended prohibitions.
+
+### Workshop 2: The Empty Compliance Dashboard
+
+**Situation:** A new account appears in Organizations and in the central Config aggregator's configured scope. Its compliance view is empty. No Config recorder or rules were deployed in its workload Region.
+
+**Decision:** Which conclusion is justified?
+
+- A. The account is fully compliant because nothing is red.
+- B. Source recording and evaluation must be configured and verified before assessing compliance.
+- C. Give the aggregator permission to terminate noncompliant resources.
+
+**Answer: B.** Aggregation cannot manufacture uncollected source observations. A mistakes absence of evidence for compliance. C misunderstands the read-only aggregation function. Test with a known resource and inspect observation/evaluation timestamps after setup.
+
+### Workshop 3: A Pipeline Check Is Bypassed
+
+**Situation:** Guard and proactive Control Tower checks reject unsafe CloudFormation templates. An engineer creates the same unsafe configuration through a direct service API. The requirement is prevention regardless of deployment path.
+
+**Decision:** Which additional layer is needed?
+
+- A. Applicable service-native, IAM, or organization preventive controls for the bypass path.
+- B. More comments in the Guard rule file.
+- C. An annual Well-Architected review as the sole blocker.
+
+**Answer: A.** Control scope must include the actual operation. B cannot change enforcement coverage. C may identify risk but cannot block that call. Keep pipeline checks for early feedback and detection for unexpected gaps.
+
+### Workshop 4: Resource Sharing Versus Firewall Enforcement
+
+**Situation:** A networking team must share subnets with application accounts. Separately, security must apply WAF policies to in-scope public applications, including newly created ones.
+
+**Decision:** Match each requirement to the appropriate mechanism.
+
+```text
+Share supported subnet resources -> RAM
+Central WAF policy management    -> Firewall Manager
+Approved self-service templates  -> Service Catalog (different need)
+```
+
+**Reasoning:** RAM shares access while the owner retains control; it does not install WAF rules. Firewall Manager needs correct prerequisites and policy scope; creating a RAM share does not satisfy them. Service Catalog can offer approved products but is not a replacement for the two stated controls.
+
+### Workshop 5: Automation Acts On Old Evidence
+
+**Situation:** A Config finding records public SSH at 10:00. An engineer fixes it at 10:02. At 10:03, remediation starts from the earlier result and attempts to replace all security-group rules, including unrelated application rules.
+
+**Decision:** Choose two design improvements.
+
+- A. Re-read the current resource and no-op if already compliant.
+- B. Change only the scoped unsafe rule, with approvals and rollback evidence where appropriate.
+- C. Retry full replacement indefinitely until no errors remain.
+
+**Answer: A and B.** A handles stale observations; B limits collateral damage. C amplifies a bad action and can conflict with the resource owner. Verify the resulting resource and allow a fresh compliance evaluation to confirm the state.
+
+### Workshop 6: What Does The Auditor Actually Need?
+
+**Situation:** An auditor asks for an AWS service's compliance report and evidence that the company's production accounts enforced their own access controls during a quarter. The team has downloaded an AWS report and declares both requests complete.
+
+**Decision:** What is missing?
+
+- A. Customer-specific control evidence, scope, timestamps, exceptions, and review records, organized using suitable tools such as Audit Manager.
+- B. A broader administrator role for the auditor in every workload.
+- C. A new RAM share of the organization's management account.
+
+**Answer: A.** Artifact addresses the AWS-side report; customer controls need their own evidence. B is neither necessary proof nor a least-privilege default. C is not a way to share an account or certify controls. Verify evidence covers all in-scope accounts and the requested time period.
+
+## G. Governance Readiness And Objective Map
+
+| Official skill | Teaching and demonstration |
+| --- | --- |
+| 6.1.1 Organizations setup | A/B/F1; account ownership and policy inheritance |
+| 6.1.2 Control Tower | C/F3; landing zone, enrollment, optional/custom controls |
+| 6.1.3 Organization policies | B; SCP/RCP, declarative, tagging, AI preferences |
+| 6.1.4 Central security administration | A/C/D; delegation plus verified service coverage |
+| 6.1.5 Root credentials and recovery | A; member/root distinction and break-glass design |
+| 6.2.1 Secure IaC | C/F3; lint, policy checks, server-side checks and StackSets |
+| 6.2.2 Tags for management | B/C; taxonomy, mandatory-tag gaps, ownership |
+| 6.2.3 Central enforcement | C/D/F4; Firewall Manager scope and verification |
+| 6.2.4 Secure resource sharing | C/F4; RAM permissions and Service Catalog roles |
+| 6.3.1 Detection, remediation, notifications | D/F2/F5; recording to verified correction |
+| 6.3.2 Audit evidence | E/F6; AWS versus customer evidence |
+| 6.3.3 Architecture evaluation | E; review, risk ownership, improvement verification |
+
+Check against [the official Domain 6 objectives](https://docs.aws.amazon.com/aws-certification/latest/security-specialty-03/security-specialty-03-domain6.html). You should be able to name the control's exact scope, explain its failure modes, and demonstrate it worked. "The service is enabled" is not enough.
+
+---
+
 ## 0. AWS Component Primer: What Each Service Does First
 
 This section explains the AWS components in simple words before going into exam decision rules.
@@ -1843,12 +2181,12 @@ Remediation:
 | Who called StopLogging? | CloudTrail |
 | Which resources violate rules? | Config |
 | What was the bucket configuration yesterday? | Config |
-| Search API events with SQL-like queries | CloudTrail Lake |
+| Search API events with SQL-like queries | CloudTrail Lake for eligible existing users; Athena for appropriately stored S3 logs |
 | Aggregate configuration across accounts | Config aggregator |
 
 Common trap:
 
-CloudTrail tells you activity. Config tells you configuration state and compliance.
+CloudTrail tells you activity. Config tells you configuration state and compliance. CloudTrail Lake is not available to new customers after May 31, 2026; see the [Detection guide](01-detection-and-monitoring-study-guide.md) for current collection/query choices.
 
 ---
 

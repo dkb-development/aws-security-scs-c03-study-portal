@@ -133,6 +133,21 @@ Add a short navigation map for the concepts relevant to the reviewed topic. Keep
 
 ---
 
+## Cross-Domain Checks Added After The Six-Topic Pass
+
+Updated: 2026-10-10. Use these checks in addition to the teaching/readability standard, not instead of it.
+
+1. **Trace the complete operation.** Identify the real principal, request, service handoffs, stored data, keys, and observations. Teach what can fail between components, not just each service's definition.
+2. **State scope beside the rule.** Distinguish same-account versus cross-account grants, role versus session, API prevention versus CloudFormation checks, recording versus aggregation, and retention versus recoverability. A catchy rule without its boundary can teach the wrong answer.
+3. **Check service lifecycle and new capabilities.** Verify current enrollment restrictions, end-of-support dates, renamed products, condition-key support, imported-key rotation, certificate export, and policy/service coverage. Update repeated old assertions in the retained reference sections too.
+4. **Require negative tests.** A successful authorized read is not proof of tenant isolation; a green dashboard is not proof of coverage; a completed backup is not proof of recovery. Include the forbidden case, missing data case, and failed dependency.
+5. **Follow changes over time.** Show session expiry, credential renewal, secret rotation stages, key lifetime, policy inheritance changes, stale findings, retries, and recovery. Many scenario errors come from treating systems as static.
+6. **Preserve the reader's routes.** Keep existing anchors, add a grouped learning path, place foundation links where needed, and give foundations a return path. Add connected foundation lessons rather than expanding only a glossary table.
+7. **Map every official skill.** Record both the teaching location and how the learner applies it. Do not count a service name in a table as sufficient depth. Priorities from local sources must not exclude less-frequent official objectives.
+8. **Validate and publish in the requested sequence.** Run `node scripts/validate-study-docs.mjs` and `git diff --check`; review substantive diffs. When asked for per-topic pushes, confirm each push succeeded before editing the next topic. Synchronizing Markdown is not website deployment.
+
+For additive expansions, retain useful original reference sections and correct contradictions, but introduce a clear first-reading path so the learner is not forced through repeated dictionaries. Use at least several substantial original scenarios covering diagnosis, design choices, and plausible wrong answers; include ordering/matching or multiple-response practice where useful.
+
 ## 1. Ground Rules
 
 - Use official AWS documentation for service behavior, feature names, and current exam objectives.
