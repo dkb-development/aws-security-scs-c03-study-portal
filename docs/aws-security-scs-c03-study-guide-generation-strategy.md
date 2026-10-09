@@ -4,7 +4,132 @@ Generated: 2026-10-06
 
 This is the repeatable strategy used to build the Topic 1 Detection study guide. Use this same checklist for every remaining topic so the guides stay consistent, exam-focused, and easy to read.
 
-The goal is not to create a textbook. The goal is to create a high-yield study guide from the concepts that repeatedly appear in legitimate prep sources, official exam objectives, and the local practice-question bank.
+The goal is a complete learning path for developers with basic AWS familiarity, followed by exam-depth scenario practice. Service recognition and revision tables alone do not meet this goal. Official objectives define coverage; community topic signals help prioritize examples but must not narrow coverage.
+
+## Revised Teaching Standard: 2026-10-09
+
+This standard supersedes any older wording below that favors short summaries or keyword frequency over understanding. Apply it one domain at a time and expand the corresponding foundations sections in the same pass.
+
+1. Map every official domain skill to a teaching section and a way to demonstrate it. A service name in a table is not sufficient coverage.
+2. Start from the learner's existing knowledge of EC2, S3, and Lambda. Define new terms before relying on them.
+3. Explain each major component's purpose, mechanism, required setup, scope, permission boundaries, limitations, and verification. Include an ordinary real-world example before exam reasoning.
+4. Teach end-to-end flows. Explain what happens between services and what can fail at each handoff.
+5. Use realistic multi-constraint scenarios. Explain the correct answer and each distractor; change a requirement to demonstrate when another answer becomes appropriate.
+6. Expand `00` with substantive explanations, diagrams, examples, and return links. Link concepts inline where readers first need the explanation, not only in a list at the beginning.
+7. Verify current behavior in official AWS sources, including availability changes and product renaming. Distinguish current deployment advice from a scenario explicitly using an existing service.
+8. Label abbreviated policies, event fragments, and teaching schemas. Do not present pseudocode or a partial policy as a complete deployment artifact.
+9. Retain useful original topic coverage during rewrites. Record deferred gaps explicitly instead of calling every guide complete after a structural scan.
+10. Validate relative links/anchors, fenced blocks, JSON examples, and diffs. Documentation validation does not imply that examples were deployed into AWS.
+
+Review progress and remaining work: [study material review](study-material-review.md).
+
+## Readability Standard: Preserve Depth, Reduce Reading Effort
+
+Use the revised [Detection guide](01-detection-and-monitoring-study-guide.md) and its linked [foundations](00-aws-security-foundations-for-beginners.md#detection-pipeline-from-first-principles) as the reference implementation. Match the teaching quality and visual organization, not the exact section count.
+
+The reader should be able to understand the main path by scanning headings and diagrams, then read the accompanying explanations to understand prerequisites, exceptions, and tradeoffs. Scannability is an additional layer over the full explanation, not a replacement for it.
+
+### Organize By The Learner's Decisions
+
+Group the chapter contents into a few coherent reading passes. For Detection, these are evidence collection, application/network signals, detection and alerting, and troubleshooting/practice. Other topics should use their own natural sequence.
+
+Keep stable section headings and existing anchors when refining content. Add descriptive subheadings when a section changes from mechanism to setup, troubleshooting, or a different component. Do not make the reader infer that change from a long paragraph.
+
+Introduce a service when the learning path first needs it. Give enough explanation there to understand the next step, with an inline foundation link for more background. Avoid duplicating a full service dictionary and then repeating the same explanations throughout the chapter.
+
+### Use Small, Complete Reading Units
+
+- Aim for one idea per paragraph, usually two or three short sentences. Roughly 25-50 words is a useful target, not a hard limit.
+- Split at a change of idea: purpose, mechanism, prerequisite, example, limitation, or verification. Do not break a sentence merely to satisfy a length rule.
+- Use short labels such as **Situation**, **Decision**, **Options**, and **Reasoning** in practice. Use descriptive subheadings in the teaching sections.
+- Use bullets for genuinely separate checks, requirements, or answer-choice explanations. Keep cause-and-effect explanations in connected prose.
+- Bold the key term or decisive distinction sparingly. If everything is emphasized, nothing is easy to find.
+- Keep blank lines around headings, lists, tables, and fenced examples. Use normal Markdown that works in GitHub and the portal's renderer.
+
+### Choose A Visual That Explains Something
+
+| What the learner needs to understand | Best starting format |
+| --- | --- |
+| A sequence of handoffs | Short vertical flow |
+| A choice that changes the solution | Branching decision tree |
+| Two different permission or processing paths | Separate, labeled paths |
+| Where evidence is collected or a request fails | Layer/path diagram with observation points |
+| Several alternatives with the same attributes | Compact comparison table |
+| What an actual event or policy means | JSON plus a field-reading guide |
+| What happened over time | Short timeline |
+
+Use fenced `text` diagrams. Prefer narrow diagrams, normally around 60-68 columns, with readable labels and one main idea. Keep literal records/code intact when wrapping would change their meaning; explain them with a narrower diagram nearby.
+
+Every arrow must have a defensible meaning: sequence, data movement, dependency, or permission check. Label the type when it might be mistaken for a chronological service call. Do not turn a conceptual permission diagram into a claim about actual API execution order.
+
+Keep important conditions visible. For example, a diagram should not imply every collected event becomes a finding, every finding is forwarded, or delivery always means successful processing.
+
+Do not add diagrams merely to meet a quota. Add one when it makes an abstract boundary, dependency, or decision easier to see. Keep the prose that explains the exceptions.
+
+### Reusable Teaching Unit
+
+Use this sequence flexibly; omit a label only when it adds no value, not the underlying explanation:
+
+```text
+DESCRIPTIVE HEADING
+    |
+    +-- Purpose: what problem does this solve?
+    +-- Mechanism: how does it work?
+    +-- Diagram: show the path, boundary, or decision
+    +-- Concrete example: record, policy, or real scenario
+    +-- Walkthrough: interpret the example step by step
+    +-- Prerequisites and limits: when does it fail or not apply?
+    +-- Verification: how do we know it worked?
+    +-- Foundation link: deeper background at the point of use
+```
+
+For instance, teach an alert as log record -> count -> alarm condition -> notification. Then explain statistic choice, dimensions, missing data, target permissions, and final delivery. The diagram introduces the mechanism; it must not remove those details.
+
+### Scenario Layout
+
+Preserve realistic multi-constraint scenarios. Separate the narrative, the decision being asked, the options, and the answer explanation with whitespace and labels. Do not shorten the scenario into a giveaway keyword.
+
+```text
+Scenario title
+
+Situation
+  Workload, existing configuration, symptom, and constraints.
+
+Decision
+  The exact question. State how many answers are required.
+
+Options
+  Plausible alternatives with meaningful differences.
+
+Answer
+  Selected option or ordering.
+
+Reasoning
+  Why the answer meets the stated constraints.
+  Why each alternative fails in this situation.
+  What to verify after applying the answer.
+
+Change one fact, when useful
+  Show which changed requirement changes the decision.
+```
+
+Keep answer reasoning readable as individual points. Do not replace full distractor explanations with "the other options are wrong." Avoid raw HTML or collapsed-answer markup unless the target renderer has been verified to support it.
+
+### Foundations Must Teach, Too
+
+The `00` file needs the same readable units, not one-line definitions. Explain the purpose, mechanism, an everyday or AWS example, a diagram where helpful, prerequisites, and limits. Keep technical vocabulary defined before relying on it.
+
+Add a short navigation map for the concepts relevant to the reviewed topic. Keep section anchors stable, link from the chapter at the point of need, and provide a return link. Do not turn headings into links if that would change their generated anchors.
+
+### Content-Preservation And Readability Checks
+
+1. Capture the current files before restructuring. Use that snapshot, not just the last commit when the workspace already contains substantive edits.
+2. For an editorial pass, preserve facts, qualifications, examples, code, citations, scenario stems, choices, and reasoning. Paragraph breaks and new visuals must not erase detail.
+3. Compare the before/after content. For additive formatting, an original-token subsequence check can detect omissions; separately confirm every original code block remains intact. Word count alone is not evidence of preservation.
+4. Validate local links and anchors, fenced blocks, and JSON. Confirm the same scenario count and official-skill coverage remain.
+5. Read representative beginning, middle, and practice sections in a Markdown preview when available. Check hierarchy, table width, diagram alignment, and whether adjacent blocks are easy to distinguish. Otherwise report source-only review honestly.
+6. Check new diagrams for ambiguous arrows, missing conditions, and excessive width. Do not call a readability pass a fresh factual review of all AWS behavior.
+7. Synchronize the reviewed Markdown copies and record the scope. Generated website content, publishing, commits, and pushes are separate actions; do not report them as completed by a document edit.
 
 ---
 
@@ -23,13 +148,13 @@ The goal is not to create a textbook. The goal is to create a high-yield study g
 
 For each topic, check these local files:
 
-1. `outputs/aws-security-scs-c03-important-concepts-and-questions.md`
+1. `docs/aws-security-scs-c03-important-concepts-and-questions.md`
    - Use this for repeated concepts, source signals, and high-priority patterns.
 
-2. `outputs/aws-security-scs-c03-topic-derived-original-questions.md`
+2. `docs/aws-security-scs-c03-topic-derived-original-questions.md`
    - Use this for original topic-derived questions and explanations.
 
-3. `outputs/aws-security-scs-c03-github-practice-bank.md`
+3. `docs/aws-security-scs-c03-github-practice-bank.md`
    - Use this for open/permissive question-bank patterns.
    - Do not blindly copy. Extract concepts and create clean explanations.
 
@@ -126,7 +251,7 @@ This guide is exam-focused. It is based on the question bank and topic signals c
 
 ### 5.2 Component Primer First
 
-Always explain the AWS components before exam tricks.
+Always explain each AWS component before relying on it in a decision. Integrate the explanation into the learning path, following the readability standard above.
 
 For each important component, include:
 
@@ -237,7 +362,7 @@ Keep snippets short and exam-oriented.
 
 ### 5.9 Practice Set
 
-End with original mini questions.
+End with original, realistic scenario questions with full reasoning. Short recognition questions may supplement these, but cannot replace them.
 
 Use:
 
@@ -265,7 +390,7 @@ The checklist should be short, direct, and exam-focused.
 - Explain traps gently and directly.
 - Use tables only when they make comparison easier.
 - Use examples whenever a concept feels abstract.
-- Avoid giant paragraphs.
+- Use small, complete reading units as specified in the readability standard.
 - Use headings so the user can skim.
 - Do not claim "this will appear in the exam."
 - Say "high-signal," "repeated pattern," or "probable style" instead.
@@ -277,10 +402,10 @@ The checklist should be short, direct, and exam-focused.
 Run these checks:
 
 ```bash
-wc -l outputs/<guide-file>.md
-rg -n "TODO|TBD|undefined|FIXME" outputs/<guide-file>.md
-sed -n '1,120p' outputs/<guide-file>.md
-tail -80 outputs/<guide-file>.md
+wc -l docs/<guide-file>.md
+rg -n "TODO|TBD|undefined|FIXME" docs/<guide-file>.md
+sed -n '1,120p' docs/<guide-file>.md
+tail -80 docs/<guide-file>.md
 ```
 
 Manual review checklist:
@@ -293,59 +418,61 @@ Manual review checklist:
 - Does it include diagrams?
 - Does it include JSON/policy/event examples where helpful?
 - Does it include traps and decision trees?
-- Does it include a mini practice set?
+- Does it include realistic scenario practice with every answer choice explained?
 - Is it readable without opening the website?
 
 ---
 
 ## 8. Reusable Guide Skeleton
 
+Adapt this skeleton to the domain's learning sequence. It must support full explanations, not force the content into revision-note fragments.
+
 ```markdown
 # AWS Security Specialty SCS-C03 <Topic> Study Guide
 
-Generated: YYYY-MM-DD
+Reviewed: YYYY-MM-DD
 
-This guide is exam-focused...
+Audience and scope: basic AWS familiarity; official domain objectives.
 
-## 0. AWS Component Primer: What Each Service Does First
+## Learning Path
 
-Official references used:
+Group linked sections into coherent reading passes.
 
-- ...
+## 1. The Problem And The Overall Flow
 
-### 0.1 Service Name
+Introduce the real-world problem and explain the domain's main flow.
 
-Plain English:
+## 2. First Mechanism Or Component
 
-Real-world example:
+### What It Does And Why It Exists
 
-Simple flow:
+### How It Works
 
-Exam angle:
+Include a useful diagram, then explain its conditions and boundaries.
 
-Trap:
+### A Concrete Example
 
-## 1. What This Domain Means In The Exam
+Show and interpret an event, policy, request, or real workflow.
 
-## 2. High-Return Topics From The Question Signals
+### Setup, Limitations, And Verification
 
-## 3. The Core Mental Model
+Continue the component sequence with inline foundation links.
 
-## 4. Service Selection Decision Trees
+## 3. Comparing Designs And Choosing Controls
 
-## 5. Common Exam Scenarios
+## 4. Organization And Integration Scenarios
 
-## 6. Automation And Organization-Wide Patterns
+## 5. Troubleshooting The Full Path
 
-## 7. Common Traps
+## 6. Worked End-To-End Design
 
-## 8. Memory Tables
+## 7. Original Scenario Practice
 
-## 9. Worked Examples
+Use Situation / Decision / Options / Answer / Reasoning.
 
-## 10. Mini Practice Set
+## 8. Readiness And Official Objective Coverage
 
-## 11. Final Checklist
+Map every official skill to teaching and application.
 ```
 
 ---
@@ -372,4 +499,3 @@ Trap fourth
 ```
 
 That order keeps the guide readable and prevents the material from becoming a memorization-only list.
-

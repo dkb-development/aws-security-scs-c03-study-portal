@@ -4,6 +4,10 @@ Use this file when a study guide mentions an AWS service or security concept and
 
 The six numbered study guides are still the exam-focused material. This file is the beginner support layer behind them.
 
+Review status, 2026-10-09: the Detection foundations have received a deeper teaching pass. Foundations for Topics 2-6 will be expanded alongside their individual chapter reviews; this is not yet a completed review of every concept in this file.
+
+For Topic 1, begin with [the detection pipeline](#detection-pipeline-from-first-principles), [logs versus metrics](#logs-metrics-and-alarms-explained), [delivery permissions](#log-delivery-permissions-step-by-step), and [network evidence](#dns-and-network-evidence-explained). Then use the service-specific sections below.
+
 ## How To Use This File
 
 If you already understand a concept, skip this file and continue the main study guide.
@@ -18,6 +22,19 @@ This foundation guide = what the AWS thing is in the first place
 ```
 
 ## Foundation Map
+
+### Detection Quick Navigation
+
+| If this feels unclear... | Open this explanation |
+| --- | --- |
+| How observations become alerts | [Detection pipeline](#detection-pipeline-from-first-principles) |
+| How a log line becomes a number | [Logs, metrics, and alarms](#logs-metrics-and-alarms-explained) |
+| Why delivery and reading need different permissions | [Delivery permissions](#log-delivery-permissions-step-by-step) |
+| Why accepted traffic can still fail | [DNS and network evidence](#dns-and-network-evidence-explained) |
+| Why a delivered event can still fail | [Retries and duplicate handling](#reliable-events-and-duplicate-handling) |
+| How to maintain monitoring configuration | [Regular assessments](#regular-assessments-and-state-manager) |
+
+### All Foundation Areas
 
 | Area | Learn these first |
 | --- | --- |
@@ -634,11 +651,33 @@ Common uses:
 - identify resources shared outside your account or organization
 - validate IAM policies
 - generate policy suggestions from CloudTrail activity
-- find unused access in some Security Hub contexts
+- analyze unused access with the relevant analyzer/integration
 
 Real-world example:
 
 Access Analyzer reports that an S3 bucket policy allows access from outside the organization. The security team fixes the bucket policy before data is exposed.
+
+#### Possible Access Versus Observed Access
+
+An external-access analyzer has a zone of trust, such as an account or organization. It reasons about supported resource policies to find access beyond that boundary. This can identify a risky grant even if nobody has used it yet.
+
+```text
+Bucket policy allows a partner role
+               |
+               v
+Analyzer compares access with the trust boundary
+               |
+               v
+Finding: external access is possible
+```
+
+The partner access might be approved business access or an accident. Investigate purpose before changing it. CloudTrail answers a different question: whether a supported access event was observed and collected.
+
+Policy validation looks for policy problems. Policy generation uses observed CloudTrail activity to help build a narrower policy; it is a starting point for review, not proof that future legitimate operations are unnecessary. A rarely used disaster-recovery permission might not appear during the observation window.
+
+Unused-access and internal-access analysis address other questions and have their own scope. Choose the capability explicitly. An external resource-policy scan is not a complete report of every identity's effective permissions. [Access Analyzer capabilities](https://docs.aws.amazon.com/IAM/latest/UserGuide/what-is-access-analyzer.html).
+
+[Return to Detection: access analysis](01-detection-and-monitoring-study-guide.md#73-sensitive-data-vulnerabilities-and-access-are-separate-risks).
 
 ## 3. Logging And Detection
 
@@ -684,21 +723,66 @@ Exam memory:
 
 Official cross-check: [What is AWS CloudTrail?](https://docs.aws.amazon.com/awscloudtrail/latest/userguide/cloudtrail-user-guide.html)
 
+#### Follow One Request
+
+Suppose a worker uses a temporary role to read `customers/june.csv`. Its software signs a `GetObject` request with that role's credentials. S3 checks access. If the appropriate data-event collection is enabled, CloudTrail records the supported activity, including identity and request context.
+
+If the result includes `AccessDenied`, the record is evidence of an attempt, not a successful download.
+
+```text
+Worker's temporary credentials
+          |
+          v
+S3 GetObject --> S3 authorization --> Success or error
+                         |
+                         v
+             Selected CloudTrail data event
+                         |
+                         v
+                  Configured destination
+```
+
+There are two independent settings to understand. **Event selection** decides what to capture. **Destination configuration** decides where it goes. A working S3 destination does not help if your selector excludes reads. A correct selector does not help if the destination's policy blocks delivery.
+
+Event history is the recent management-event view, not an unlimited archive. A trail is a delivery configuration, not the log file itself. The files can outlive the trail, depending on retention. An organization trail standardizes collection across accounts, but still needs deliberate event categories and Region coverage.
+
+When reading an event, locate the action, time, target, identity/session, and error before deciding what happened. `AssumedRole` means temporary role credentials were involved. It does not by itself identify the human responsible; follow the session and other evidence.
+
+[Return to Detection: CloudTrail](01-detection-and-monitoring-study-guide.md#2-cloudtrail-understand-what-was-done).
+
 ### CloudTrail Lake
 
-CloudTrail Lake stores CloudTrail events for SQL-style querying.
+**What the store does**
 
-Use it when the question says:
+CloudTrail Lake is a managed event store that lets you query collected events with SQL. A store is a configured collection of records with selection and retention settings. It can include supported non-AWS events too; it is not limited to AWS API calls.
 
-- query API activity over time
-- investigate historical CloudTrail events
-- central event data store
+**Availability matters:** AWS closed CloudTrail Lake to new customers on May 31, 2026. Existing customers can continue using it. Do not recommend new enrollment just because a scenario asks for SQL. [AWS availability notice](https://docs.aws.amazon.com/awscloudtrail/latest/userguide/cloudtrail-lake-service-availability-change.html).
 
 Simple flow:
 
 ```text
 AWS activity -> CloudTrail events -> CloudTrail Lake event data store -> SQL query
 ```
+
+An existing customer might use its store to find role activity from last month. The query can search only events that were ingested and retained. A SQL engine cannot recover S3 object reads that collection never included.
+
+**Choose by customer eligibility and data location**
+
+```text
+Existing Lake customer + events in a store?
+       |
+       +-- Yes --> Evaluate querying that store
+
+New customer + audit files already in S3?
+       |
+       +-- Yes --> Evaluate Athena over those files
+
+Both paths: only collected, retained events can be queried.
+```
+
+For a new customer with CloudTrail files already in S3, Athena is a natural alternative to evaluate. A table describes how to read those files, and SQL selects the matching records. The choices differ in setup and data location, not in whether the word "query" appears.
+
+[Return to Detection: Lake availability](01-detection-and-monitoring-study-guide.md#25-cloudtrail-lake-recognize-the-current-constraint).
 
 ### CloudWatch
 
@@ -722,7 +806,40 @@ Exam memory:
 - CloudTrail is API audit history.
 - CloudWatch Logs is not the same as CloudTrail.
 
+#### Follow A Login Failure
+
+The application writes a JSON record saying a login failed. CloudWatch Logs stores that record inside a log stream, usually one producer's sequence of records. A log group collects related streams and applies settings such as retention.
+
+A metric filter can match `login_failed` and emit the number `1`. A metric stores measurements over time. An alarm evaluates those measurements and changes state when its configured condition is met. SNS can then notify a confirmed subscriber.
+
+```text
+Application log line
+       |
+       v
+Log stream inside a log group
+       |
+       +--> Logs Insights: inspect individual failures
+       |
+       +--> Metric filter: count failures
+                    |
+                    v
+             Alarm: too many?
+                    |
+                    v
+             SNS: notify subscriber
+```
+
+Each arrow needs configuration. A Logs Insights query is not automatically an alarm. A metric filter does not necessarily publish a measurement every minute. If no records arrive, that can mean no failures or a broken collector; use a separate heartbeat when the distinction matters.
+
+For EC2 files, an agent normally reads and sends selected logs. Having built-in EC2 CPU metrics does not prove your operating-system logs were uploaded. For Lambda, investigate its service logging configuration and execution role instead of installing an EC2 agent.
+
+See [metrics and alarm evaluation](#logs-metrics-and-alarms-explained) for a numerical example. [Return to Detection: CloudWatch](01-detection-and-monitoring-study-guide.md#4-cloudwatch-from-a-log-line-to-an-alert).
+
 ### VPC Flow Logs
+
+#### Why Network Evidence Exists
+
+A network connection can fail before an application receives a request. In that case, the application's logs may contain nothing. Network metadata lets you investigate the attempted communication at an earlier layer.
 
 VPC Flow Logs record network flow metadata for VPC traffic.
 
@@ -760,6 +877,27 @@ You see repeated rejected traffic to port 22 from the internet. That points to a
 
 Official cross-check: [VPC Flow Log records](https://docs.aws.amazon.com/vpc/latest/userguide/flow-log-records.html)
 
+#### Read It Like A Conversation Summary
+
+In the record above, the client uses source port `20641` to reach service port `22`, typically SSH. Protocol `6` means TCP. The record summarizes packets during an interval, not every command sent over SSH. The start/end values are Unix timestamps; align them with other logs before correlating.
+
+```text
+Client                                  Server
+172.31.16.139:20641  ---------------->  172.31.16.21:22
+                        TCP
+                  Summary: 20 packets
+                  Decision: ACCEPT
+                  Recording: OK
+```
+
+`ACCEPT` does not establish that SSH authentication succeeded. The server can still reject the username or key. `REJECT` indicates a network-level rejection; it is not an IAM policy decision. A flow record also does not identify the exact matching firewall rule.
+
+`NODATA` and `SKIPDATA` describe recording conditions. The first indicates no traffic for that interval; the second indicates skipped records. Treat skipped evidence as a visibility limitation, not as proof of a blocked connection.
+
+Flow Logs exclude some traffic, including queries to the Amazon-provided DNS server and instance metadata traffic. A missing record can therefore be a documented collection limitation. Use Resolver logs for DNS names and application logs for application outcomes. [Limitations](https://docs.aws.amazon.com/vpc/latest/userguide/flow-logs.html).
+
+[Return to Detection: network evidence](01-detection-and-monitoring-study-guide.md#5-network-evidence-follow-the-actual-path).
+
 ### Route 53 Resolver Query Logs
 
 Route 53 Resolver query logs record DNS queries made by resources in your VPC.
@@ -780,7 +918,36 @@ Exam memory:
 - VPC Flow Logs show IP traffic metadata.
 - Neither shows full application payload.
 
+#### Follow A Name Lookup
+
+Before connecting to `api.partner.example`, an application typically asks DNS for an address. If it uses the VPC Resolver and query logging is configured for the VPC, you can investigate the relevant query context and response.
+
+```text
+App: "Where is api.partner.example?"
+                |
+                v
+           VPC Resolver -----> Query logging destination
+                |
+                v
+        Answer: an IP address
+                |
+                v
+       App may attempt a connection
+```
+
+A lookup is not a completed connection. The application might stop after resolving, or fail at a later network/TLS/application step. Also, cached Resolver answers do not generate a fresh query-log record for every repeated application lookup.
+
+Logs are evidence of what the logging path observed, not an exact count of every application DNS request.
+
+If the workload uses another DNS server or an encrypted DNS service directly, examine that route's telemetry. Merely enabling VPC Resolver logging does not intercept every alternative DNS path. For missing logs, also verify VPC association, destination delivery permissions, account/Region, and time range. [Resolver query logging](https://docs.aws.amazon.com/Route53/latest/DeveloperGuide/resolver-query-logs.html).
+
+[Return to Detection: DNS and transit evidence](01-detection-and-monitoring-study-guide.md#52-dns-and-transit-gateway-evidence).
+
 ### GuardDuty
+
+#### The Problem It Solves
+
+Raw logs can contain millions of ordinary actions. A human cannot inspect every line. GuardDuty analyzes supported activity for suspicious patterns and produces findings that narrow the investigation. It is closer to an analyst raising a concern than a firewall blocking a request.
 
 GuardDuty is managed threat detection.
 
@@ -816,11 +983,23 @@ Exam memory:
 
 Official cross-check: [GuardDuty findings](https://docs.aws.amazon.com/guardduty/latest/ug/guardduty_findings.html)
 
+#### Detection Coverage Versus Stored Evidence
+
+GuardDuty obtains independent foundational telemetry. Your own CloudTrail trail and VPC Flow Log resources are not prerequisites for that foundational collection, and GuardDuty does not create your raw audit archive for you. Keep the evidence collection needed for later investigations. [Foundational sources](https://docs.aws.amazon.com/guardduty/latest/ug/guardduty_data-sources.html).
+
+For example, a worker role starts making unusual calls from an unfamiliar location. A finding tells you which role/session and activity to investigate. You then use retained CloudTrail records, workload context, and the change calendar to decide whether credentials were stolen or a legitimate deployment changed behavior.
+
+Optional protection plans extend visibility to particular workloads. EKS audit monitoring observes Kubernetes API activity; runtime monitoring observes supported workload behavior through its required telemetry/agent. Neither label means every container action is automatically covered. Check coverage health as well as enablement.
+
+Suppression is a decision not to act on matching findings: matching findings are archived and are not sent through normal downstream destinations such as EventBridge. A broad suppression rule can therefore hide useful alerts. Prefer a narrow, reviewed exception for a known activity. [Suppression rules](https://docs.aws.amazon.com/guardduty/latest/ug/findings_suppression-rule.html).
+
+[Return to Detection: GuardDuty](01-detection-and-monitoring-study-guide.md#6-guardduty-detect-suspicious-behavior).
+
 ### Security Hub
 
-Security Hub centralizes and prioritizes security findings.
+The Security Hub product family helps a security team collect and prioritize security issues. Distinguish **Security Hub CSPM**, which provides posture controls and findings aggregation, from the current broader **Security Hub** prioritization and correlation experience.
 
-It receives findings from AWS services and partner tools, normalizes them, and checks security standards.
+CSPM means cloud security posture management: checking whether resources are configured according to security expectations.
 
 Simple flow:
 
@@ -838,10 +1017,34 @@ A team wants one central view of failed CIS controls, GuardDuty alerts, Inspecto
 
 Exam memory:
 
-- Security Hub is not the deepest investigation graph. That is Detective.
+- Detective provides behavior investigation; current Security Hub also has attack-path/exposure views. Choose by the investigation being requested.
 - Security Hub is not raw log storage. That is Security Lake or S3/Athena patterns.
 
 Official cross-check: [AWS Security Hub overview](https://docs.aws.amazon.com/securityhub/latest/userguide/what-is-securityhub-v2.html)
+
+#### Follow A Failed Control
+
+Imagine a standard requires S3 buckets to block public access. A relevant control evaluates a bucket using the required configuration evidence and produces a result. Analysts can see that result with vulnerability and threat findings, assign ownership, and track work.
+
+```text
+Resource configuration --> Control evaluation --> Finding
+                                                   |
+                                                   v
+                                      Owner investigates and fixes
+                                                   |
+                                                   v
+                                      Re-evaluation verifies state
+```
+
+Closing the ticket or marking a workflow resolved does not change the bucket's policy. The resource must actually be corrected. Also, no finding is not automatically a passing result: perhaps the control was disabled or its AWS Config recording prerequisite was missing.
+
+CSPM uses AWS Security Finding Format (ASFF) to represent findings. This is different from Security Lake's OCSF-normalized log storage. A finding contains a conclusion and context; it is not every raw event that led to the conclusion.
+
+The current broader Security Hub experience uses OCSF findings too. Thus OCSF does not exclusively identify Security Lake, and ASFF identifies the CSPM context rather than every Security Hub product. Read the product scope before choosing an integration format.
+
+Central configuration controls deployment of settings; aggregation gathers results. In a 20-account organization, verify which accounts and Regions are governed by the configuration policy before trusting a consolidated view. [CSPM concepts](https://docs.aws.amazon.com/securityhub/latest/userguide/what-is-securityhub.html).
+
+[Return to Detection: findings and posture](01-detection-and-monitoring-study-guide.md#7-findings-posture-and-regular-assessments).
 
 ### Detective
 
@@ -866,6 +1069,22 @@ Exam memory:
 
 Official cross-check: [What is Amazon Detective?](https://docs.aws.amazon.com/detective/latest/userguide/what-is-detective.html)
 
+#### What A Behavior Graph Adds
+
+A graph represents entities as connected items. Instead of manually querying an IP, then a role, then an instance, an analyst can move between related entities and examine their activity over time.
+
+```text
+Unfamiliar IP --> Role session --> API activity
+                       |
+                       +--------> Related resource / finding
+```
+
+Suppose one suspicious IP used two roles during the same hour. Looking only at the first finding might miss the second role. A relationship view helps explore that context. It does not prove both sessions were malicious: a corporate proxy can legitimately serve many users.
+
+The graph depends on enabled data sources, member coverage, and the service's available history. It is not an arbitrary SQL engine for every file you stored in S3. Use raw logs to verify precise facts and preserve them according to your retention requirements.
+
+[Return to Detection: correlation](01-detection-and-monitoring-study-guide.md#83-correlation-requires-shared-context).
+
 ### Security Lake
 
 Security Lake stores security data in a centralized data lake using OCSF.
@@ -885,7 +1104,27 @@ AWS security logs -> Security Lake -> S3 data lake -> analytics/SIEM/query tools
 Exam memory:
 
 - Security Lake is for broad security data storage and normalization.
-- CloudTrail Lake is specifically for CloudTrail event querying.
+- CloudTrail Lake is a managed audit-event query store; current new-customer availability is restricted.
+
+More precisely, CloudTrail Lake supports audit-event storage/querying, including supported external events, but is closed to new customers. Security Lake addresses common-schema security data collection across supported sources.
+
+#### Why A Common Schema Helps
+
+One source might call an address `sourceIPAddress`; another might use `srcaddr`. A tool searching both needs to understand those formats. Normalization maps source-specific fields into a shared structure while retaining useful source context. It is more than putting unrelated JSON files in the same bucket.
+
+```text
+API log fields ----------\
+Network log fields -------+--> OCSF mapping --> Organized data in S3
+Supported custom source -/                           |
+                                                    v
+                                          Authorized query/subscriber
+```
+
+Security Lake uses supported source integrations and Parquet storage. A custom source must conform to its integration requirements. Do not assume that every AWS log category is a native source or that enabling the lake enables every source.
+
+For a real-world example, a security team can correlate network and API evidence through its analytics tool while using the lake as the common store. The subscriber needs appropriate access; creating a lake does not automatically grant a third-party SIEM permission or install its detection rules. [Sources](https://docs.aws.amazon.com/security-lake/latest/userguide/internal-sources.html).
+
+[Return to Detection: Security Lake](01-detection-and-monitoring-study-guide.md#82-security-lake-normalizes-it-does-not-automatically-investigate).
 
 ### Macie
 
@@ -908,6 +1147,25 @@ Exam memory:
 - Macie findings do not expose all sensitive data content; they provide details for investigation.
 
 Official cross-check: [Macie findings](https://docs.aws.amazon.com/macie/latest/user/findings.html)
+
+#### Why A Clean Result Can Be Misleading
+
+Imagine a support bucket has ten thousand uploaded files. A discovery job selects only a subset. Its result cannot establish that every other object is free of sensitive data. Check the selected buckets/objects, sampling, supported formats and storage, and the permission to read/decrypt before interpreting the result.
+
+A managed identifier recognizes supported common sensitive-data patterns. A custom identifier lets you describe a business-specific format, such as `PATIENT-[0-9]{8}`, optionally with nearby keywords to improve confidence. An allow list can reduce known benign matches. These controls tune classification; they do not grant or revoke S3 access.
+
+```text
+Object is selected --> Readable and supported? --> Content evaluated
+                               |                         |
+                               no                        v
+                               |                 Finding / discovery result
+                               v
+                       Coverage gap to inspect
+```
+
+Sensitive-content findings and bucket policy findings answer different questions. A public bucket can be risky even when no sensitive content was found; a private bucket can contain highly sensitive data. Macie also does not establish that an attacker downloaded anything. Investigate access separately.
+
+[Return to Detection: classification](01-detection-and-monitoring-study-guide.md#73-sensitive-data-vulnerabilities-and-access-are-separate-risks).
 
 ### Inspector
 
@@ -937,6 +1195,23 @@ Exam memory:
 
 Official cross-check: [What is Amazon Inspector?](https://docs.aws.amazon.com/inspector/latest/user/what-is-inspector.html)
 
+#### Vulnerable Is Not The Same As Exploited
+
+A CVE is an identifier for a publicly described vulnerability. If Inspector reports a vulnerable dependency in a container image, that means the software needs risk assessment and remediation. It does not establish that an attacker executed it.
+
+```text
+Supported workload --> Scan coverage --> Vulnerability finding
+                                              |
+                                              v
+                                Prioritize, patch/rebuild, rescan
+```
+
+For EC2, supported agent-based and agentless scanning paths have different prerequisites. For ECR, image eligibility and configured scan behavior matter. Lambda capabilities also depend on the scan type and supported resources. An empty findings list is not enough: inspect whether the resource was covered and successfully assessed.
+
+In practice, prioritize a vulnerable internet-facing production service differently from an isolated test image, while still tracking both. After rebuilding an image, confirm that the deployed workload actually uses the new image. Removing a finding from a dashboard does not replace deployment and re-evaluation.
+
+[Return to Detection: vulnerability assessment](01-detection-and-monitoring-study-guide.md#73-sensitive-data-vulnerabilities-and-access-are-separate-risks).
+
 ### AWS Config
 
 AWS Config records resource configuration and evaluates compliance rules.
@@ -958,6 +1233,28 @@ Result: bucket-b = NON_COMPLIANT
 Config does not usually prevent a bad action by itself. It detects and records configuration state. Some patterns add remediation.
 
 Official cross-check: [AWS Config concepts](https://docs.aws.amazon.com/config/latest/developerguide/config-concepts.html)
+
+#### Recorder, Rule, And Aggregator
+
+These are three different pieces. A recorder captures supported resource configuration. A rule evaluates whether the recorded/current state meets an expectation. An aggregator presents configuration and compliance information from multiple sources.
+
+```text
+Resource changes --> Recorder --> Configuration history
+                          |
+                          v
+                   Rule evaluation --> Compliance result
+                                              |
+                                              v
+                                      Central aggregator
+```
+
+For example, a security group begins allowing SSH from everywhere. CloudTrail can help identify the API caller; Config can describe the changed configuration and evaluate the relevant rule. Evaluation may be triggered by changes or on a schedule, depending on the rule.
+
+It is not equivalent to rejecting the original API request.
+
+If no result appears, verify resource recording, Region, rule scope/trigger, and permissions. Adding an aggregator alone does not start missing recorders. Remediation is another step, often a Systems Manager Automation runbook, and needs its own role and safeguards.
+
+[Return to Detection: assessments](01-detection-and-monitoring-study-guide.md#72-config-and-state-manager-state-rather-than-attack-behavior).
 
 ### Conformance Pack
 
@@ -2103,10 +2400,10 @@ Decision table:
 | Need | Pick |
 | --- | --- |
 | Quick query over CloudWatch Logs | CloudWatch Logs Insights |
-| SQL over CloudTrail events in an event data store | CloudTrail Lake |
+| SQL over an existing eligible CloudTrail event data store | CloudTrail Lake |
 | SQL over files stored in S3 | Athena |
 | Query old logs already exported to S3 | Athena |
-| Investigate API calls without building S3 tables | CloudTrail Lake |
+| Investigate API calls in an existing Lake customer's store | CloudTrail Lake |
 
 Example:
 
@@ -2125,6 +2422,31 @@ CloudTrail Lake event data store -> CloudTrail Lake SQL
 Beginner trap:
 
 Do not choose Athena just because the question says SQL. First ask where the data lives.
+
+CloudTrail Lake is closed to new customers from May 31, 2026; the existing-store examples above are conditional on continued customer access. [Availability notice](https://docs.aws.amazon.com/awscloudtrail/latest/userguide/cloudtrail-lake-service-availability-change.html).
+
+#### Understand The Setup Behind A Query
+
+An Athena table is a description of files: their location, column names, types, and format. The files stay in S3. Partitions divide data, often by day or account, to reduce the amount a query reads.
+
+An incorrect prefix or absent partition metadata can produce zero results even when the files exist.
+
+The caller needs permission to read the relevant data, decrypt it when necessary, and use the query's results location. Check these independently. A query can read the source but fail while writing its output.
+
+For Logs Insights, choose the correct log groups and time window. Fields in one application's JSON are not guaranteed to exist in another's. First inspect a representative record, then write the query against the actual structure.
+
+If a table has columns `event_time`, `action`, and `actor`, this illustrative SQL asks a specific question:
+
+```sql
+SELECT event_time, actor
+FROM example_audit_table
+WHERE action = 'GetObject'
+ORDER BY event_time DESC;
+```
+
+Those names are placeholders for a teaching schema, not a universal CloudTrail schema. SQL syntax cannot make an uncollected event appear.
+
+[Return to Detection: query selection](01-detection-and-monitoring-study-guide.md#81-query-where-the-evidence-lives).
 
 ### CloudTrail Insights
 
@@ -3272,3 +3594,251 @@ When you read any AWS security question, slow it down into this picture:
 ```
 
 If you can classify the question into those five lines, the answer choices become much easier.
+
+## 14. Detection Foundations In Depth
+
+These sections build the mechanisms used throughout Topic 1. Read them when a service summary makes sense but the steps between services still feel unclear.
+
+### Detection Pipeline From First Principles
+
+#### Start With An Everyday Example
+
+Imagine a building with an entry register, a camera, and a guard. The register records entries; the camera records a different kind of evidence; the guard interprets observations. Installing a camera does not automatically notify the building owner.
+
+Cloud monitoring has the same separation, although each source observes a specific digital activity.
+
+#### Give Each Output A Different Job
+
+A log is a record. A metric is a number measured over time. A finding is an interpreted security issue. An alert is a notification or trigger. A response is an action taken after assessment.
+
+This vocabulary matters because an exam scenario can fail at any of those boundaries.
+
+```text
+Observation       Interpretation      Delivery            Action
+-----------       --------------      --------            ------
+Log/event  ----->  Rule or model ----> Alert routing ----> Investigate
+                         |                                    |
+                         v                                    v
+                      Finding                             Remediate
+```
+
+Consider a file download. CloudTrail data events can record a supported S3 request. GuardDuty might identify an unusual access pattern. EventBridge can route a resulting finding. A responder then checks whether the download was legitimate. Each step supplies a different answer.
+
+#### Place The Control In Time
+
+```text
+BEFORE / AT THE ACTION       OBSERVE IT           AFTERWARD
+          |                     |                   |
+          v                     v                   v
+      Preventive            Detective           Corrective
+      Block access          Find a problem      Fix the problem
+```
+
+There are three useful kinds of control. **Preventive** controls block disallowed actions, such as an authorization policy. **Detective** controls observe problems, such as a logging/detection rule. **Corrective** controls change the situation afterward, such as an approved remediation workflow.
+
+Do not expect a detective service to prevent the original action just because it found it.
+
+#### Understand What An Alert Can Get Wrong
+
+There are also two kinds of uncertainty. A **false positive** is an alert for benign activity. A **false negative** is a missed real problem. Reducing all alerts to zero by suppressing broad categories can make false negatives worse.
+
+Investigate noisy findings and narrow the exception to the known behavior.
+
+To design a useful pipeline, ask what question must be answered, which source can answer it, where that source is collected, how long it is retained, and who receives the outcome. To test it, verify each handoff and the final result.
+
+[Return to Detection: evidence selection](01-detection-and-monitoring-study-guide.md#1-start-with-a-question-not-a-service).
+
+### Logs, Metrics, And Alarms Explained
+
+#### From Three Records To One Measurement
+
+A log answers "what happened in this observation?" A metric answers "how much or how often over time?" An alarm asks "does the measurement meet a condition?"
+
+Example application records:
+
+```text
+10:00:05 login_failed request=41
+10:00:18 login_failed request=42
+10:00:44 login_failed request=43
+```
+
+A filter can turn each record into value `1`. Summing the one-minute values gives `3`. Taking their average gives `1`, which would answer a different question. This is why the statistic is part of the alarm logic.
+
+```text
+Records:       [failure] [failure] [failure]
+Metric values:     1         1         1
+Period sum:              3
+Threshold:               >= 3
+Result:                  Breaching period
+```
+
+A **namespace** organizes metric names. **Dimensions** identify a particular series, for example the production service versus a test service. An alarm watching the test series will not react to production values even when both metrics have the same name.
+
+#### From Measurements To An Alarm Condition
+
+An evaluation period is a time bucket. An M-out-of-N condition requires M breaching buckets among N evaluated buckets. For a 2-out-of-3 example:
+
+```text
+Period:       10:00    10:01    10:02
+Failure sum:     8        0        9
+Threshold >=5: yes       no      yes
+
+Two breaching periods out of three -> condition satisfied
+```
+
+CloudWatch also has rules for obtaining available data and handling missing values; do not treat the example as its complete evaluation algorithm. Missing is not the same as a reported zero. A broken agent and a quiet application can look identical without a health signal.
+
+In a real system, count failed logins for threat detection and separately monitor whether the log collector is alive. A combined dashboard helps a person inspect both, but dashboard visibility alone does not notify anyone. [CloudWatch alarm behavior](https://docs.aws.amazon.com/AmazonCloudWatch/latest/monitoring/AlarmThatSendsEmail.html).
+
+[Return to Detection: building alarms](01-detection-and-monitoring-study-guide.md#42-build-a-threshold-with-meaning).
+
+### Log Delivery Permissions Step By Step
+
+#### Name The Actor Before Reading The Policy
+
+Permissions become easier when you name the actor at each step. The person configuring a log destination, the service delivering logs, and the analyst reading them are not necessarily the same identity.
+
+For a central CloudTrail archive:
+
+```text
+Setup administrator
+   | Can configure the trail and required policies
+   v
+CloudTrail service
+   | Can write the intended S3 log prefix
+   | Can use required KMS encryption operations
+   v
+Encrypted log objects
+   |
+   v
+Analyst role
+   | Can read selected S3 objects
+   | Can decrypt with the relevant key
+   v
+Investigation
+```
+
+An **identity policy** is attached to the caller, such as an analyst role. A **resource policy** is attached to the destination, such as the archive bucket. A **service principal** names an AWS service that acts, such as `cloudtrail.amazonaws.com`. A **key policy** controls the encryption key's use.
+
+These are separate documents even when one workflow needs all of them.
+
+An abbreviated teaching statement, not a complete CloudTrail bucket policy:
+
+```json
+{
+  "Effect": "Allow",
+  "Principal": { "Service": "cloudtrail.amazonaws.com" },
+  "Action": "s3:PutObject",
+  "Resource": "arn:aws:s3:::example-audit-archive/AWSLogs/111122223333/*",
+  "Condition": {
+    "StringEquals": {
+      "aws:SourceArn": "arn:aws:cloudtrail:ap-south-1:111122223333:trail/audit"
+    }
+  }
+}
+```
+
+Read it as: "this service may perform this action on this prefix when the request is for this trail." Production CloudTrail policy setup includes additional required statements/conditions, and organization trails use the appropriate organization path. Use the [complete AWS policy](https://docs.aws.amazon.com/awscloudtrail/latest/userguide/create-s3-bucket-policy-for-cloudtrail.html) when implementing.
+
+#### Locate The Failed Boundary
+
+Troubleshoot by locating the failing action. If a producer cannot write, giving an analyst more read permission is irrelevant. If logs arrive but an analyst cannot decrypt them, changing collection selectors is irrelevant.
+
+If the request times out reaching the service, first investigate networking rather than assuming an IAM denial.
+
+[Return to Detection: archive permissions](01-detection-and-monitoring-study-guide.md#32-delivery-permission-and-reading-permission-are-different).
+
+### DNS And Network Evidence Explained
+
+Before discussing logs, separate the steps a client takes to reach an HTTPS application:
+
+```text
+1. Resolve name      "What address serves api.example?"
+          |
+2. Route packets     "Is there a path to that address?"
+          |
+3. Network controls  "May this traffic pass?"
+          |
+4. TLS handshake     "Can we establish a trusted encrypted connection?"
+          |
+5. App authorization "May this user perform this operation?"
+          |
+6. App result        "Did the operation succeed?"
+```
+
+DNS logs primarily illuminate step 1. Flow metadata helps with network traffic around steps 2-3. TLS and application logs explain later outcomes. CloudTrail records supported AWS activity, which is useful when the destination is an AWS API. No single one of these is a recording of everything.
+
+An IP address identifies a network endpoint in context. A port identifies a service or temporary client endpoint on that address. TCP is a transport protocol that establishes connections; UDP sends datagrams without the same connection model.
+
+HTTPS normally uses TCP port 443, but the port number alone does not prove the traffic was a successful HTTPS transaction.
+
+An ENI is the network interface attached to an instance or service. A NAT device translates addresses, so the address visible at one observation point may differ from the original workload address. Correlate time and available original-address fields rather than assuming every public IP represents one host.
+
+Example: the worker successfully resolves a name and its traffic is accepted, but the server rejects its client certificate. More DNS logging will not explain that rejection. Inspect the TLS/application boundary. This layered reasoning makes long troubleshooting questions manageable.
+
+[Return to Detection: network scenarios](01-detection-and-monitoring-study-guide.md#53-work-through-an-ambiguous-symptom).
+
+### Reliable Events And Duplicate Handling
+
+#### Delivery And Processing Are Separate Milestones
+
+Distributed services communicate across boundaries. A sender can deliver a message successfully while the receiving application later fails to complete its work. That is why "sent" and "processed" are different states.
+
+```text
+EventBridge --> Lambda accepts invocation --> Handler creates ticket
+     |                                           |
+     | delivery failure                          | processing failure
+     v                                           v
+Delivery retry/DLQ                       Lambda failure handling
+```
+
+A **retry** repeats a failed attempt. A **dead-letter queue** stores messages that could not be delivered/processed under the configured failure policy, so someone can inspect them. A DLQ needs an owner and an alarm; unread failed events are not resolved incidents.
+
+#### Make A Repeated Event Safe To Handle
+
+```text
+Finding F-17 arrives --> Ticket T-42 created
+                              |
+                              v
+                     Remember F-17 -> T-42
+
+Finding F-17 arrives again --> Reuse / update T-42
+                              Do not create a second ticket
+```
+
+An action is **idempotent** when repeating it does not add an unintended extra effect. For example, store that ticket `T-42` already corresponds to finding `F-17`. If `F-17` arrives again, update or reuse the existing ticket instead of opening another.
+
+Include version/time handling if later finding updates need new work.
+
+Do not mark work completed before it actually succeeds. A crash between "marked complete" and "created ticket" can otherwise lose the task. Real implementations need to coordinate stored state and retries carefully, and use destination idempotency features where available.
+
+In an exam, distinguish producer failure, delivery failure, and handler failure. Match the retry/DLQ control to the boundary described. [EventBridge undelivered events](https://docs.aws.amazon.com/eventbridge/latest/userguide/eb-rule-dlq.html).
+
+[Return to Detection: reliable alerting](01-detection-and-monitoring-study-guide.md#92-a-matched-rule-is-only-half-the-journey).
+
+### Regular Assessments And State Manager
+
+Not every security check starts with an attack. Some checks ask whether a required configuration is still present today. A regular assessment can discover gradual drift, such as a monitoring agent being stopped after a maintenance change.
+
+Systems Manager State Manager uses an **association**: a document describing the desired operation/configuration, the target managed nodes, and when to apply it. Managed nodes need the required Systems Manager setup, permissions, and connectivity.
+
+```text
+Desired configuration + Target selection + Schedule
+                         |
+                         v
+                 State Manager association
+                         |
+                         v
+                 Apply to managed nodes
+                         |
+                         v
+                  Execution/compliance result
+```
+
+For example, the platform team distributes the approved monitoring configuration and checks association execution across its fleet. If a newly launched instance is not managed or does not match the target selection, it can be missed.
+
+An association existing in the console is not proof that every server received it.
+
+Compare the tools by their unit of work: Config evaluates supported resource configuration; a conformance pack packages Config checks and remediation definitions; State Manager applies desired state through associations; Automation runs a defined procedure. These can work together, but none replaces API audit retention.
+
+[AWS State Manager](https://docs.aws.amazon.com/systems-manager/latest/userguide/systems-manager-state.html). [Return to Detection: assessments](01-detection-and-monitoring-study-guide.md#72-config-and-state-manager-state-rather-than-attack-behavior).

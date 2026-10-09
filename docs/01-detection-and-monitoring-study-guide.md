@@ -1,1586 +1,773 @@
-# AWS Security Specialty SCS-C03 Detection Study Guide
+# 01. Detection: From Evidence To A Working Security Alert
 
-Beginner links for this topic:
+Reviewed against AWS documentation: 2026-10-09. Exam: SCS-C03.
 
-- [CloudTrail](00-aws-security-foundations-for-beginners.md#cloudtrail), [CloudTrail Lake](00-aws-security-foundations-for-beginners.md#cloudtrail-lake), [CloudWatch](00-aws-security-foundations-for-beginners.md#cloudwatch)
-- [VPC Flow Logs](00-aws-security-foundations-for-beginners.md#vpc-flow-logs), [Route 53 Resolver Query Logs](00-aws-security-foundations-for-beginners.md#route-53-resolver-query-logs)
-- [GuardDuty](00-aws-security-foundations-for-beginners.md#guardduty), [Security Hub](00-aws-security-foundations-for-beginners.md#security-hub), [Detective](00-aws-security-foundations-for-beginners.md#detective), [Security Lake](00-aws-security-foundations-for-beginners.md#security-lake)
-- [Macie](00-aws-security-foundations-for-beginners.md#macie), [Inspector](00-aws-security-foundations-for-beginners.md#inspector), [IAM Access Analyzer](00-aws-security-foundations-for-beginners.md#iam-access-analyzer), [AWS Config](00-aws-security-foundations-for-beginners.md#aws-config)
-- [EventBridge, SNS, SQS, and Lambda Together](00-aws-security-foundations-for-beginners.md#eventbridge-sns-sqs-and-lambda-together), [Athena vs Logs Insights vs CloudTrail Lake](00-aws-security-foundations-for-beginners.md#athena-cloudwatch-logs-insights-and-cloudtrail-lake), [CloudTrail Insights](00-aws-security-foundations-for-beginners.md#cloudtrail-insights), [OpenSearch Security Analytics](00-aws-security-foundations-for-beginners.md#opensearch-security-analytics)
+This chapter assumes you know what an EC2 instance, an S3 bucket, and a Lambda function are. It teaches the monitoring decisions around them, including why a seemingly correct design can fail. Read it in order the first time; use the contents when revising.
 
-Generated: 2026-10-06
+Detection is 16% of scored SCS-C03 content. The official objectives cover monitoring, logging, and troubleshooting. This is a coverage target, not a prediction of individual questions. The scenarios below are original learning exercises. [AWS exam domains](https://docs.aws.amazon.com/aws-certification/latest/security-specialty-03/security-specialty-03-appendix-b.html).
 
-This guide is exam-focused. It is based on the question bank and topic signals collected in this workspace, not on copied real exam questions or dumps.
+## Learning Path
 
-Use it as a reverse-engineered study path: first learn the patterns that appear repeatedly, then practice questions from the portal.
+**Pass 1: Collect trustworthy evidence**
 
----
+1. [Understand evidence and the detection pipeline](#1-start-with-a-question-not-a-service).
+2. [Collect API evidence with CloudTrail](#2-cloudtrail-understand-what-was-done).
+3. [Protect evidence across accounts](#3-build-a-trustworthy-central-log-archive).
+**Pass 2: Understand application and network signals**
 
-## 0. AWS Component Primer: What Each Service Does First
+4. [Collect application logs and build alarms](#4-cloudwatch-from-a-log-line-to-an-alert).
+5. [Read network and DNS evidence](#5-network-evidence-follow-the-actual-path).
+**Pass 3: Detect, investigate, and deliver alerts**
 
-This section explains the AWS components in simple words before going into exam decision rules.
+6. [Detect threats with GuardDuty](#6-guardduty-detect-suspicious-behavior).
+7. [Check posture and prioritize findings](#7-findings-posture-and-regular-assessments).
+8. [Query and correlate evidence](#8-investigate-and-correlate).
+9. [Deliver alerts reliably](#9-eventbridge-deliver-the-alert-reliably).
+**Pass 4: Diagnose and practice**
 
-Official references used for service meaning:
+10. [Troubleshoot application and service logging](#10-troubleshoot-service-logging).
+11. [Work through a complete design](#11-worked-design-a-payments-company).
+12. [Practice scenario reasoning](#12-original-scenario-practice).
+13. [Check readiness and objective coverage](#13-readiness-and-objective-coverage).
 
-- GuardDuty: https://docs.aws.amazon.com/guardduty/latest/ug/what-is-guardduty.html
-- CloudTrail: https://docs.aws.amazon.com/cloudtrail/
-- Security Hub: https://aws.amazon.com/documentation-overview/security-hub/
-- Detective: https://docs.aws.amazon.com/detective/
-- Security Lake and OCSF: https://docs.aws.amazon.com/security-lake/latest/userguide/open-cybersecurity-schema-framework.html
-- Macie: https://docs.aws.amazon.com/macie/latest/user/getting-started.html
-- Inspector: https://docs.aws.amazon.com/inspector/latest/user/what-is-inspector.html
-- EventBridge: https://docs.aws.amazon.com/eventbridge/
+For unfamiliar words, start with [how a detection pipeline works](00-aws-security-foundations-for-beginners.md#detection-pipeline-from-first-principles). Concept links throughout this chapter open the relevant foundations section in Markdown readers.
 
-I am using text diagrams instead of screenshots because AWS console screens change often. Text diagrams are easier to revise, searchable in Markdown, and work offline.
+## 1. Start With A Question, Not A Service
 
----
+**The situation**
 
-### 0.1 CloudTrail: Who Did What In AWS?
+Imagine a support application stores customer files in S3 and runs on EC2. An employee reports that a private file appeared on the internet. There are several separate questions:
 
-CloudTrail records AWS API activity.
+| Question | Evidence to collect | What it cannot prove alone |
+| --- | --- | --- |
+| Who changed the bucket's permissions? | CloudTrail management events | Whether someone downloaded a particular object |
+| Which identity requested the file? | CloudTrail S3 data events | The human behind stolen credentials |
+| Which customer used the application download route? | Application access/audit logs | All direct S3 access outside the application |
+| Did the server connect to an unfamiliar IP? | VPC Flow Logs | The file contents sent over that connection |
+| Which domain did it resolve? | Resolver query logs | That a subsequent connection succeeded |
+| Was the activity suspicious? | GuardDuty findings | A complete archive of every raw event |
+| Was sensitive information stored there? | Macie discovery | That the information was actually stolen |
 
-Plain English:
-
-> CloudTrail is like an audit camera for AWS API calls. It tells you who did something, what they did, when they did it, and from where.
-
-Real-world example:
-
-Your company notices that an S3 bucket policy became public. You want to know:
-
-- Who changed the bucket policy?
-- When did it happen?
-- Was it done from the console, CLI, SDK, or an assumed role?
-- Which IP address made the call?
-
-CloudTrail is the service you check.
-
-Simple flow:
+A **log** records an observation. A **finding** is a security conclusion drawn from observations or configuration. An **alert** gets a finding or condition to someone who can act. These are different outputs, so storing logs does not automatically create an alert.
 
 ```text
-Admin / role / AWS service makes API call
-        |
-        v
-AWS service receives the API call
-        |
-        v
-CloudTrail records the event
-        |
-        v
-S3 bucket / CloudTrail Lake / CloudWatch Logs / EventBridge
+An action happens
+      |
+      v
+Evidence is captured --> Stored with appropriate retention
+      |                              |
+      v                              v
+Detection evaluates it          Investigation searches it
+      |
+      v
+Finding or threshold breach
+      |
+      v
+Alert reaches a person or workflow
+      |
+      v
+Response, followed by verification
 ```
 
-Example event:
+**Before choosing a service, fill in the requirement**
+
+Before choosing services, write down the assets, threats, accounts, Regions, required evidence, retention period, and acceptable delay. Also ask who needs to read the evidence and who must be unable to destroy it.
+
+For example, a payment application might need API audit logs for a year, login failures searchable for 30 days, and a notification shortly after someone disables auditing. Those are three requirements, not one checkbox named "enable monitoring."
+
+**Reasoning checkpoint:** A team has a dashboard showing CPU use, but no record of object downloads. Is its detection complete? No. Resource health does not answer a data-access investigation. Monitoring must follow the threat being investigated.
+
+## 2. CloudTrail: Understand What Was Done
+
+[CloudTrail](00-aws-security-foundations-for-beginners.md#cloudtrail) records supported AWS activity. An API request is an instruction such as "change this bucket policy" or "read this object." The console also makes API requests behind its buttons.
+
+### 2.1 Event Categories And Collection Choices
+
+| Category | What it describes | Example | Collection implication |
+| --- | --- | --- | --- |
+| Management | Resource administration | `PutBucketPolicy`, `CreateRole`, `DescribeInstances` | Trails normally include management activity |
+| Data | Actions on the data/resources themselves | S3 `GetObject`, Lambda `Invoke` | Select the required supported resource types and scope |
+| Network activity | Supported AWS API activity through VPC endpoints | An endpoint policy denies a request | Configure network activity selectors; it is not packet capture |
+| Insights | An unusual API call/error rate compared with a baseline | A sudden abnormal burst of administrative calls | Enable Insights and the appropriate underlying management events |
+
+"Read" does not mean "data event." `DescribeInstances` reads configuration and is a management event; S3 `GetObject` reads an object and is a data event. Classify the operation by what it does, not just its verb. [Management events](https://docs.aws.amazon.com/awscloudtrail/latest/userguide/logging-management-events-with-cloudtrail.html), [data events](https://docs.aws.amazon.com/awscloudtrail/latest/userguide/logging-data-events-with-cloudtrail.html).
+
+**Event history** provides the last 90 days of management events for the account and Region being viewed.
+
+It is not your organization's long-term log archive and does not show S3 data events. A **trail** delivers selected events to S3 and can also deliver to CloudWatch Logs. Creating a trail today cannot reconstruct data events that were never captured yesterday.
+
+[Organization trail and Event history behavior](https://docs.aws.amazon.com/awscloudtrail/latest/userguide/creating-trail-organization.html).
+
+### 2.2 Read An Event Without Jumping To Conclusions
+
+```text
+Read the record in five passes
+
+WHEN? --> WHAT ACTION? --> WHO? --> WHICH OBJECT? --> RESULT?
+08:40     GetObject        Role     report.csv        Denied
+
+Attempt observed: yes
+Successful download: not established
+```
+
+This is a shortened illustrative event, not a complete CloudTrail record:
 
 ```json
 {
+  "eventTime": "2026-10-09T08:40:00Z",
   "eventSource": "s3.amazonaws.com",
-  "eventName": "PutBucketPolicy",
+  "eventName": "GetObject",
+  "awsRegion": "ap-south-1",
   "userIdentity": {
     "type": "AssumedRole",
-    "arn": "arn:aws:sts::111122223333:assumed-role/AdminRole/session"
+    "arn": "arn:aws:sts::111122223333:assumed-role/SupportExport/job-42",
+    "sessionContext": {
+      "sessionIssuer": {
+        "arn": "arn:aws:iam::111122223333:role/SupportExport"
+      }
+    }
   },
-  "sourceIPAddress": "203.0.113.25",
-  "eventTime": "2026-10-06T09:15:00Z"
+  "sourceIPAddress": "203.0.113.42",
+  "requestParameters": {
+    "bucketName": "example-support-files",
+    "key": "customers/report.csv"
+  },
+  "errorCode": "AccessDenied"
 }
 ```
 
-Exam angle:
+Read it in this order: time, action, identity, target, result. The role session attempted a read and received a denial. It does not establish a successful download.
 
-| If the question says... | Think... |
-|---|---|
-| Who called this AWS API? | CloudTrail |
-| Someone changed IAM/S3/EC2 configuration | CloudTrail management event |
-| Someone read or wrote S3 objects | CloudTrail data event |
-| Need SQL over CloudTrail events | CloudTrail Lake |
-| Need immediate reaction to an API call | EventBridge rule for CloudTrail API event |
+The role's permanent ARN and the temporary session ARN describe different things; follow session context when tracing the identity. A source IP can belong to a proxy or gateway, so an IP alone is not a person's identity. See [roles and temporary credentials](00-aws-security-foundations-for-beginners.md#iam-role).
 
-Important trap:
+### 2.3 Select The Evidence You Actually Need
 
-```text
-Bucket-level action like PutBucketPolicy -> management event
-Object-level action like GetObject       -> data event
+Suppose compliance requires all administrative actions plus reads and writes under a sensitive S3 prefix. An illustrative advanced-selector array is:
+
+```json
+[
+  {
+    "Name": "Administrative activity",
+    "FieldSelectors": [
+      { "Field": "eventCategory", "Equals": ["Management"] }
+    ]
+  },
+  {
+    "Name": "Sensitive object activity",
+    "FieldSelectors": [
+      { "Field": "eventCategory", "Equals": ["Data"] },
+      { "Field": "resources.type", "Equals": ["AWS::S3::Object"] },
+      {
+        "Field": "resources.ARN",
+        "StartsWith": ["arn:aws:s3:::example-support-files/customers/"]
+      }
+    ]
+  }
+]
 ```
 
----
+The first selector keeps management evidence; the second adds the sensitive object scope.
 
-### 0.2 CloudTrail Lake: SQL Search Over CloudTrail
-
-CloudTrail Lake lets you query CloudTrail events with SQL.
-
-Plain English:
-
-> CloudTrail Lake is CloudTrail plus a built-in query store.
-
-Real-world example:
-
-A security analyst asks:
-
-> Show me all API calls made by this role in the last 30 days from outside India.
-
-Instead of exporting CloudTrail logs and building your own query pipeline, you can query CloudTrail Lake.
-
-Simple flow:
+Omitting a `readOnly` condition includes reads and writes within that scope. A selector that captures only writes would miss a download. A prefix selector also misses objects outside that prefix, even in the same bucket.
 
 ```text
-CloudTrail events
-        |
-        v
-CloudTrail Lake event data store
-        |
-        v
-SQL query
-        |
-        v
-Investigation result
+Does the event match either configured selector?
+    |
+    +-- Management event --------------------> Selected
+    |
+    +-- S3 object event
+          |
+          +-- Under customers/ prefix? -- yes -> Selected
+          |
+          +-- Outside that prefix? ---------> Not selected here
+
+No readOnly filter: reads AND writes in the selected scope
 ```
 
-Example query idea:
+**Before changing the configuration**
+
+Changing selectors can replace an existing selector configuration: preserve required categories when editing. Data-event collection adds cost; reduce volume with justified scope, not by removing the very events needed to investigate the threat. [AWS selector examples](https://docs.aws.amazon.com/awscloudtrail/latest/userguide/logging-data-events-with-cloudtrail.html).
+
+### 2.4 Insights And Endpoint Denials
+
+#### A. Is The API Rate Unusual?
+
+CloudTrail Insights compares API rates with normal behavior. Call-rate analysis requires write management events; error-rate analysis requires read or write management events. An anomaly is a reason to investigate, not proof of compromise. A deployment can legitimately cause a burst.
+
+GuardDuty addresses broader threat behavior, while Insights addresses this narrower rate question. [Insights collection requirements](https://docs.aws.amazon.com/awscloudtrail/latest/userguide/logging-management-events-with-cloudtrail.html).
+
+#### B. Did The Endpoint Policy Deny The Request?
+
+Network activity events address another specific question: what happened when an API request passed through a supported [VPC endpoint](00-aws-security-foundations-for-beginners.md#vpc-endpoint)? A `VpceAccessDenied` event can identify endpoint-policy denial. VPC Flow Logs might show allowed network traffic while API authorization still fails.
+
+TCP connectivity and permission to call an API are separate checks. [Network activity events](https://docs.aws.amazon.com/awscloudtrail/latest/userguide/logging-network-events-with-cloudtrail.html).
+
+### 2.5 CloudTrail Lake: Recognize The Current Constraint
+
+> **Availability checkpoint:** Existing customer or new customer? That changes which designs are available.
+
+[CloudTrail Lake](00-aws-security-foundations-for-beginners.md#cloudtrail-lake) is a managed event store with SQL queries. It can also ingest supported non-AWS events; "CloudTrail only" is too restrictive a definition. However, AWS closed it to new customers on May 31, 2026.
+
+Existing customers can continue using it. A new implementation must consider availability, not mechanically choose Lake whenever SQL appears. Existing S3 archives can be queried with Athena; CloudWatch is another direction identified by AWS. [AWS availability notice](https://docs.aws.amazon.com/awscloudtrail/latest/userguide/cloudtrail-lake-service-availability-change.html).
+
+**Worked decision:** An existing Lake customer needs to investigate its stored events. Querying that store is sensible. A new account already has years of S3 audit logs and needs occasional SQL searches. Athena fits the existing data location and avoids assuming new Lake enrollment.
+
+## 3. Build A Trustworthy Central Log Archive
+
+### 3.1 Separate Administrative Control From Workloads
+
+An [AWS account](00-aws-security-foundations-for-beginners.md#aws-account) is a useful boundary. Production administrators should not automatically be log-archive administrators.
+
+```text
+Management account / authorized delegated administrator
+                 |
+                 +--> Organization trail, multi-Region
+                              |
+         +--------------------+-------------------+
+         |                    |                   |
+      App account A       App account B       New account C
+         |                    |                   |
+         +--------------------+-------------------+
+                              |
+                              v
+                   Log archive account: S3 + KMS
+                              |
+                              v
+                   Security analysts: limited read access
+```
+
+An organization trail brings member accounts into a common trail configuration; members cannot alter that organization trail. Multi-Region scope captures enabled Regions, subject to opt-in behavior. These settings do not automatically enable every data-event type.
+
+Also, choosing an opt-in home Region can exclude members that have not enabled it. [Organization trail behavior](https://docs.aws.amazon.com/awscloudtrail/latest/userguide/creating-trail-organization.html).
+
+### 3.2 Delivery Permission And Reading Permission Are Different
+
+The diagram shows required permission checks, not the chronological order of AWS API calls.
+
+```text
+PATH 1: SERVICE DELIVERS EVIDENCE
+
+CloudTrail --> S3 write --> KMS encryption permission
+                                   |
+                                   v
+                            Encrypted log object
+
+PATH 2: ANALYST READS EVIDENCE
+
+Analyst --> S3 read --> KMS decrypt permission
+                                |
+                                v
+                         Readable evidence
+```
+
+Learn [how log delivery crosses permission boundaries](00-aws-security-foundations-for-beginners.md#log-delivery-permissions-step-by-step) before memorizing a policy.
+
+CloudTrail must be permitted to write to the archive. Its bucket policy normally includes the service principal `cloudtrail.amazonaws.com`, `s3:GetBucketAcl` on the bucket, and `s3:PutObject` on the required log prefix. Organization delivery needs the organization prefix.
+
+Restrict the service's use to the intended trail with `aws:SourceArn`; do not solve a delivery problem by making the bucket public. [CloudTrail bucket policy](https://docs.aws.amazon.com/awscloudtrail/latest/userguide/create-s3-bucket-policy-for-cloudtrail.html).
+
+With SSE-KMS, the [KMS key policy](00-aws-security-foundations-for-beginners.md#kms-key-policy) must permit the required CloudTrail encryption operations. Analysts separately need S3 read access and KMS decryption access. A disabled key can break a previously valid design.
+
+"The bucket policy allows it" is not enough when the encryption layer denies it. [CloudTrail KMS permissions](https://docs.aws.amazon.com/awscloudtrail/latest/userguide/create-kms-key-policy-for-cloudtrail.html).
+
+### 3.3 Confidentiality, Retention, And Integrity Solve Different Problems
+
+```text
+WHO CAN READ IT?    CAN IT BE DELETED?    WAS IT CHANGED?
+       |                   |                   |
+       v                   v                   v
+Access + encryption     Retention          Validation
+
+One control does not answer all three questions.
+```
+
+| Requirement | Control | Why another control alone is insufficient |
+| --- | --- | --- |
+| Unauthorized people must not read logs | Restrictive policies and encryption | Encryption does not stop an authorized principal deleting objects |
+| Preserve evidence for a required period | Appropriate retention and S3 Object Lock | A checksum does not prevent deletion |
+| Detect alteration after delivery | CloudTrail log file validation | Validation does not prevent tampering |
+| Reduce archive storage cost | S3 lifecycle transitions consistent with retention | Moving to an archive class can delay investigation access |
+| Keep analysts from changing evidence | Separate read and administration roles | A shared administrator identity defeats separation |
+
+CloudTrail validation uses signed digest files and hashes. Enable it before the period you need to validate, retain the digest chain, and perform validation. Merely enabling the feature does not mean someone has checked the logs.
+
+It verifies delivered evidence, not whether you selected every necessary event category. [Log validation](https://docs.aws.amazon.com/awscloudtrail/latest/userguide/cloudtrail-log-file-validation-intro.html).
+
+[Object Lock](00-aws-security-foundations-for-beginners.md#s3-object-lock) operates on object versions. Compliance retention is stronger against early deletion than governance retention with authorized bypass. Choose based on the stated requirement and keep the decryption key usable for the retention period. An undeletable encrypted object with an unusable key is not useful evidence.
+
+**Worked failure:** New member accounts appear in the organization trail, but their log prefixes remain empty. Check trail status, bucket prefix permissions, and KMS permission. Seeing the trail listed does not prove delivery succeeded.
+
+Do not deploy another trail in every account until you understand the existing failure.
+
+## 4. CloudWatch: From A Log Line To An Alert
+
+[CloudWatch](00-aws-security-foundations-for-beginners.md#cloudwatch) handles application logs, measurements, queries, and alarms. [Logs, metrics, and alarms](00-aws-security-foundations-for-beginners.md#logs-metrics-and-alarms-explained) explains how these pieces differ.
+
+### 4.1 EC2 Does Not Automatically Upload Application Files
+
+An EC2 instance can publish standard CPU metrics while its authentication log remains only on disk.
+
+To collect that file with the unified CloudWatch agent, you need the agent installed and running, a collection configuration, local file-read access, an instance role, and network access to the destination service.
+
+```text
+/var/log/example-app/security.log
+             |
+             | Local file permission + configured path
+             v
+      CloudWatch agent process
+             |
+             | Instance role + reachable service endpoint
+             v
+      CloudWatch Logs log group
+             |
+             +--> Query, metric filter, or subscription
+```
+
+A minimal illustrative Linux agent configuration:
+
+```json
+{
+  "logs": {
+    "logs_collected": {
+      "files": {
+        "collect_list": [
+          {
+            "file_path": "/var/log/example-app/security.log",
+            "log_group_name": "/production/support/security",
+            "log_stream_name": "{instance_id}"
+          }
+        ]
+      }
+    }
+  }
+}
+```
+
+This config selects a file; it does not grant permissions or create a network route. In private subnets, provide the appropriate service endpoints or outbound path. The `logs` endpoint serves log ingestion; metrics use their own service endpoint.
+
+Systems Manager dependencies matter if it deploys/manages the agent. [CloudWatch agent](https://docs.aws.amazon.com/AmazonCloudWatch/latest/monitoring/Install-CloudWatch-Agent.html).
+
+### 4.2 Build A Threshold With Meaning
+
+Suppose the application emits this original example:
+
+```json
+{
+  "timestamp": "2026-10-09T09:00:00Z",
+  "event": "login_failed",
+  "requestId": "req-412",
+  "sourceIp": "203.0.113.12",
+  "reason": "invalid_credentials"
+}
+```
+
+A metric filter matching `{ $.event = "login_failed" }` can publish value `1` to a custom metric such as `Security/LoginFailures`. An alarm can evaluate `Sum >= 20` in a five-minute period and notify SNS. The filter converts records into a number; the alarm evaluates that number.
+
+Do not accidentally use `Average` when you mean total failures. Dimensions identify separate metric series: a metric with `Environment=prod` is not the same series as one with no dimension. Avoid uncontrolled dimensions such as every request ID because they create many series and cost.
+
+A metric filter processes newly ingested matching events, not historical backfill. A query over yesterday's failures can find them, but adding a filter today does not retroactively create yesterday's metric. [Metric filters](https://docs.aws.amazon.com/AmazonCloudWatch/latest/logs/MonitoringLogData.html).
+
+### 4.3 Missing Data Is Not Automatically Good News
+
+```text
+Measured zero                   No measurement
+      |                               |
+      v                               v
+"The count was 0"              "We do not have a value"
+                                      |
+                             +--------+--------+
+                             |                 |
+                       Expected quiet?    Collector broken?
+```
+
+Alarms have `OK`, `ALARM`, and `INSUFFICIENT_DATA` states. The missing-data setting is part of the design.
+
+| Metric behavior | Sensible reasoning |
+| --- | --- |
+| A heartbeat should arrive every minute | Missing values may indicate a broken collector and should trigger investigation |
+| An error metric appears only when failures occur | Missing may be normal; blindly treating every gap as a breach creates noise |
+| A metric publishes a reliable zero when healthy | Zero and missing have different meanings; missing may indicate pipeline failure |
+
+An M-out-of-N alarm requires M breaching periods among N evaluated periods. For example, 2 of 3 one-minute periods reduces sensitivity to a single short spike.
+
+It can also delay detection, so choose it intentionally. A notification typically follows a state transition; an alarm remaining in `ALARM` is not an email timer. [Alarm evaluation](https://docs.aws.amazon.com/AmazonCloudWatch/latest/monitoring/AlarmThatSendsEmail.html).
+
+Anomaly detection can adapt to a changing baseline, whereas a static threshold represents a fixed business boundary. A composite alarm combines alarm states, for example elevated failures AND production traffic present, to reduce noise. Neither fixes missing source logs.
+
+### 4.4 Search, Count, And Stream Are Different Actions
+
+| Requirement | Mechanism |
+| --- | --- |
+| Investigate existing log records interactively | Logs Insights query |
+| Count new matching events for an alarm | Metric filter |
+| Forward matching logs to processing or a SIEM | Subscription filter |
+| Access telemetry from linked accounts in a Region | Cross-account observability |
+| Replicate logs into a central account/Region | CloudWatch Logs centralization, with configured rules |
+
+Example Logs Insights query for the JSON above:
 
 ```sql
-SELECT eventTime, eventSource, eventName, sourceIPAddress, userIdentity.arn
-FROM cloudtrail_lake
-WHERE userIdentity.arn LIKE '%AdminRole%'
-ORDER BY eventTime DESC;
-```
-
-Exam angle:
-
-Choose CloudTrail Lake when the question says:
-
-- SQL queries over CloudTrail events
-- managed event data store
-- investigate API activity without building an S3/Athena pipeline
-
-Do not choose CloudTrail Lake when the question asks for many log types in a normalized schema. That is **Security Lake**.
-
----
-
-### 0.3 CloudWatch: Metrics, Logs, Alarms, And Quick Log Search
-
-CloudWatch is a monitoring service.
-
-Plain English:
-
-> CloudWatch is where AWS metrics, logs, dashboards, alarms, and quick log queries commonly live.
-
-Real-world examples:
-
-- CPU on an EC2 instance crosses 90%.
-- A Lambda function logs errors.
-- An application writes JSON logs to CloudWatch Logs.
-- You want an alarm to send an email when `5xx` errors spike.
-
-Simple flow:
-
-```text
-Application / AWS service
-        |
-        +-- Metrics -> CloudWatch alarm -> SNS
-        |
-        +-- Logs    -> CloudWatch Logs -> Logs Insights query
-```
-
-Example Logs Insights query:
-
-```sql
-fields @timestamp, requestId, sourceIp, @message
-| filter @message like /AccessDenied/
-| sort @timestamp desc
+fields @timestamp, sourceIp, requestId, reason
+| filter event = "login_failed"
+| stats count(*) as failures by sourceIp, bin(5m)
+| sort failures desc
 | limit 20
 ```
 
-Exam angle:
+Subscriptions deliver to services such as Kinesis Data Streams, Data Firehose, or Lambda. Consumers must handle batched, encoded/compressed events and possible duplicates. Monitor delivery failures; a successful match does not prove the destination accepted the data. Do not confuse streaming with a historical export. [Subscriptions](https://docs.aws.amazon.com/AmazonCloudWatch/latest/logs/Subscriptions.html).
 
-| Need | CloudWatch feature |
-|---|---|
-| Query logs already in CloudWatch Logs | Logs Insights |
-| Alert when a metric crosses a threshold | CloudWatch alarm |
-| Notify someone from an alarm | CloudWatch alarm -> SNS |
-| Convert log text into a metric | Metric filter |
-| Mask sensitive data in logs | CloudWatch Logs data protection |
+Cross-account visibility and central copies are different requirements. Observability links allow investigation across accounts; centralization rules replicate selected data. Neither is automatically an immutable evidence archive. [Cross-account choices](https://docs.aws.amazon.com/AmazonCloudWatch/latest/monitoring/CloudWatch-Cross-Account-Methods.html).
 
----
+### 4.5 Health Checks And Sensitive Logs
 
-### 0.4 VPC Flow Logs: Network Conversation Metadata
+#### Test The Customer's Path
 
-VPC Flow Logs capture network traffic metadata.
+A resource health check asks whether something responds correctly. An EC2 status check can pass while the application's login route fails. Use application-level checks, such as an appropriate synthetic request, when the requirement is end-user availability.
 
-Plain English:
+The check's network access, credentials, timeout, and expected response must match the actual application.
 
-> VPC Flow Logs tell you which IP talked to which IP, over which port, and whether traffic was accepted or rejected.
+CloudWatch Synthetics runs scheduled scripts that exercise endpoints or user journeys and publishes measurements. A script can check both status and expected content; a generic HTTP 200 is not proof the requested business operation worked. [Synthetic monitoring](https://docs.aws.amazon.com/AmazonCloudWatch/latest/monitoring/CloudWatch_Synthetics_Canaries.html).
 
-They do **not** capture packet payloads.
+#### Protect What The Logs Contain
 
-Real-world example:
+Avoid putting passwords and tokens into logs. [CloudWatch Logs data protection](00-aws-security-foundations-for-beginners.md#cloudwatch-logs-data-protection) can audit and mask supported sensitive data patterns, but privileged unmask access must be restricted. Masking is not a substitute for redacting secrets before logging or rotating credentials already exposed.
 
-An EC2 instance is suspected of talking to a suspicious IP address. You want to know:
+## 5. Network Evidence: Follow The Actual Path
 
-- Did the instance connect to that IP?
-- Which port was used?
-- Was the traffic accepted or rejected?
-- How many bytes were transferred?
+### 5.1 Understand A Flow Record
 
-Use VPC Flow Logs.
-
-Example record:
+[VPC Flow Logs](00-aws-security-foundations-for-beginners.md#vpc-flow-logs) summarize traffic associated with network interfaces. An **ENI** is an Elastic Network Interface: a network attachment with addresses used by an instance or service.
 
 ```text
-srcaddr      dstaddr        srcport dstport protocol action bytes
-10.0.1.10    198.51.100.5   44321   443     6        ACCEPT 8400
+Field: srcaddr   dstaddr       srcport dstport protocol packets bytes action status
+Value: 10.0.2.7  198.51.100.9  49152   443     6        12      8200  ACCEPT OK
 ```
 
-Simple flow:
+This says the recorded flow used TCP (`6`) from a temporary client port to destination port 443, with the listed traffic volume. `ACCEPT` describes network acceptance, not successful HTTPS authentication, a successful file transfer, or benign behavior.
+
+`REJECT` helps identify blocked traffic but does not name the exact security-group or NACL rule. `NODATA` indicates no network traffic for the interval; `SKIPDATA` means records were skipped.
+
+Neither means "the network rejected a packet." Custom formats can add fields for original packet addresses and traffic direction, which help with intermediate devices. [Flow record fields](https://docs.aws.amazon.com/vpc/latest/userguide/flow-log-records.html).
+
+Flow Logs do not contain HTTP bodies or SQL queries. They also exclude some traffic, including queries to the Amazon-provided DNS server and instance metadata traffic. Collection is aggregated and delivered asynchronously; it is not an inline blocking system. [Flow Log limitations](https://docs.aws.amazon.com/vpc/latest/userguide/flow-logs.html).
+
+### 5.2 DNS And Transit Gateway Evidence
+
+[DNS](00-aws-security-foundations-for-beginners.md#dns-and-network-evidence-explained) translates a name into addresses. Resolver query logs help answer which workload queried which domain. They do not prove a TCP connection followed. Cached Resolver answers mean repeated application lookups do not necessarily create repeated query-log records.
+
+Queries that bypass the VPC Resolver, such as a separate encrypted DNS path, need their own visibility. [Resolver logging](https://docs.aws.amazon.com/Route53/latest/DeveloperGuide/resolver-query-logs.html).
+
+In a hub network, [Transit Gateway](00-aws-security-foundations-for-beginners.md#transit-gateway) routes traffic among attached VPCs and on-premises networks. Transit gateway flow logs add visibility at that transit layer, including attachment context and supported packet-loss counters. An EC2 ENI log alone may not explain a drop in the hub.
+
+[Transit gateway flow logs](https://docs.aws.amazon.com/vpc/latest/tgw/tgw-flow-logs.html).
 
 ```text
-ENI / subnet / VPC traffic
-        |
-        v
-VPC Flow Logs
-        |
-        +-- CloudWatch Logs
-        +-- S3
-        +-- Kinesis Data Firehose
+Application ENI --> VPC routing --> TGW attachment --> Remote network
+      |                                  |
+      v                                  v
+VPC Flow Logs                     TGW Flow Logs
+
+Application --> Resolver --> Domain answer
+                  |
+                  v
+           Resolver query log
 ```
 
-Exam angle:
-
-Choose VPC Flow Logs for:
-
-- accepted/rejected network traffic metadata
-- source/destination IP and port
-- ENI-level network visibility
-
-Do not choose VPC Flow Logs for:
-
-- DNS query names
-- HTTP request body
-- packet payload
-- AWS API calls
-
----
-
-### 0.5 Route 53 Resolver Query Logs: DNS Lookup Visibility
-
-Route 53 Resolver query logs record DNS queries from resources that use the VPC resolver.
-
-Plain English:
-
-> Resolver query logs tell you which domain names your workloads are trying to resolve.
-
-Real-world example:
-
-GuardDuty reports communication with a suspicious domain. You want to know:
-
-- Which EC2 instance looked up that domain?
-- When did the lookup happen?
-- What other domains did that workload query?
-
-Use Route 53 Resolver query logs.
-
-Simple flow:
+### 5.3 Work Through An Ambiguous Symptom
 
 ```text
-EC2 instance asks for bad-domain.example.com
-        |
-        v
-VPC Route 53 Resolver
-        |
-        v
-Resolver query log
-        |
-        +-- CloudWatch Logs
-        +-- S3
-        +-- Kinesis Data Firehose
+Observed symptom                Evidence to inspect
+----------------                -------------------
+Name cannot be resolved  ---->  DNS path / Resolver evidence
+Packets dropped at hub   ---->  TGW evidence / routes
+TCP accepted; app fails  ---->  Return path / TLS / application
+Need packet contents     ---->  Supported packet capture path
+                                (encryption still matters)
 ```
 
-Exam angle:
+An application times out calling a partner service. Flow Logs show `ACCEPT` to port 443.
 
-| Need | Choose |
-|---|---|
-| Network IP/port metadata | VPC Flow Logs |
-| DNS query names | Route 53 Resolver query logs |
-| AWS API activity | CloudTrail |
+Do not conclude that the partner application is healthy. Check return traffic, routing, TLS negotiation, and application logs. If the symptom is "name not found," investigate DNS first. If a Transit Gateway drop counter indicates no route, inspect the relevant routing configuration.
 
-Important trap:
+If you need actual packet contents, consider supported Traffic Mirroring with an analysis tool; encrypted payloads remain encrypted unless the inspection design can decrypt them.
 
-If an instance uses a custom DNS server instead of the VPC resolver, DNS visibility can be different. This is a common GuardDuty/DNS blind-spot style question.
+The principle is to choose evidence at the layer where the symptom occurs. Adding more copies of the wrong log does not answer the question.
 
----
+## 6. GuardDuty: Detect Suspicious Behavior
 
-### 0.6 GuardDuty: Managed Threat Detection
+[GuardDuty](00-aws-security-foundations-for-beginners.md#guardduty) is managed threat detection. It uses threat intelligence and behavioral analysis, so you do not write every rule yourself.
 
-GuardDuty is AWS managed threat detection.
+### 6.1 Independent Detection Does Not Replace Your Archive
 
-Plain English:
+GuardDuty consumes independent streams of foundational CloudTrail management, VPC flow, and DNS telemetry. You do not need to create your own trail or Flow Log resource just to supply these foundational signals.
 
-> GuardDuty watches AWS activity and looks for suspicious behavior.
-
-It can use signals such as CloudTrail activity, VPC Flow Logs, DNS activity, and optional protection plans.
-
-Real-world examples:
-
-- IAM credentials are used from an unusual country.
-- An EC2 instance talks to a known command-and-control server.
-- An instance starts scanning ports.
-- A workload communicates with a Tor exit node.
-- Suspicious activity appears in EKS audit logs.
-
-Simple flow:
+Conversely, enabling GuardDuty does not give you a searchable raw archive of all those events. Maintain your own required logs for investigation and retention. [GuardDuty data sources](https://docs.aws.amazon.com/guardduty/latest/ug/guardduty_data-sources.html).
 
 ```text
-CloudTrail / VPC Flow Logs / DNS activity / protection-plan telemetry
-        |
-        v
-GuardDuty analyzes behavior
-        |
-        v
-GuardDuty finding
-        |
-        +-- Security Hub
-        +-- EventBridge
-        +-- Detective
+AWS activity ----> GuardDuty's independent analysis ----> Finding
+      |
+      +---------> Your configured logging -------------> Evidence archive
 ```
 
-Example finding idea:
+### 6.2 Match Protection To The Workload
 
-```json
-{
-  "service": "GuardDuty",
-  "type": "UnauthorizedAccess:IAMUser/InstanceCredentialExfiltration",
-  "severity": 8,
-  "resource": "AccessKey",
-  "action": "AWS_API_CALL"
-}
-```
+Foundational detection is not every optional protection capability.
 
-Exam angle:
+| Need | Protection to examine | Important distinction |
+| --- | --- | --- |
+| Suspicious object access | S3 Protection | Behavior around S3 access, not sensitive-content classification |
+| Suspicious Kubernetes API activity | EKS Protection | Audit activity, not all process behavior inside a container |
+| Process/runtime behavior | Runtime Monitoring | Requires supported workloads and healthy security-agent coverage |
+| Suspicious supported database logins | RDS Protection | Login behavior, not a general database vulnerability scanner |
+| Suspicious Lambda network activity | Lambda Protection | Network behavior, not Lambda source-code review |
+| Malware in supported EC2 volumes | Malware Protection for EC2 | Different telemetry and prerequisites from runtime monitoring |
+| Malware in uploaded S3 objects | Malware Protection for S3 | Malware detection, not Macie's sensitive-data discovery |
 
-Choose GuardDuty when the question says:
+Verify each plan's Region, workload support, and coverage status. An enabled account with an unhealthy runtime agent still has a runtime visibility gap. [Protection feature model](https://docs.aws.amazon.com/guardduty/latest/ug/guardduty-features-activation-model.html).
 
-- threat detection
-- suspicious API activity
-- credential exfiltration
-- malicious IP/domain
-- crypto mining
-- Tor communication
-- port probing
-- EKS suspicious activity
+### 6.3 Read, Prioritize, And Tune Findings
 
-Important trap:
+#### Read The Finding In Context
 
-GuardDuty **detects**. It does not automatically fix everything. For response, use:
+Use the finding's type, account, Region, resource, severity, first/last observed times, and recurrence information together. A repeated finding may update an existing finding rather than represent a new independent incident every time. Severity helps triage; asset importance and exposure determine business impact. [Finding behavior](https://docs.aws.amazon.com/guardduty/latest/ug/guardduty_findings.html).
+
+#### Reduce Noise Without Hiding Unrelated Activity
 
 ```text
-GuardDuty finding -> EventBridge -> SNS/Lambda/Step Functions/SSM Automation
+Finding generated
+      |
+      +-- Matches suppression rule?
+              |
+              +-- Yes --> Archived; normal forwarding stops
+              |
+              +-- No ---> Normal downstream forwarding
+
+Scanner-specific exception != Suppress every EC2 finding
 ```
 
----
+Suppose an approved scanner generates port-scanning findings. A narrow suppression rule for that known scanner and finding type may be appropriate. A rule suppressing all EC2 findings would hide unrelated incidents.
 
-### 0.7 Security Hub: Central Findings And Security Posture
+Suppressed findings are archived and are not forwarded to destinations such as EventBridge or Security Hub CSPM; they also affect downstream correlation. [Suppression behavior](https://docs.aws.amazon.com/guardduty/latest/ug/findings_suppression-rule.html).
 
-Security Hub centralizes security findings and posture checks.
+Trusted and threat lists influence supported detections; they are not firewall rules. Their applicability varies by finding type. Do not infer that trusting an IP makes every possible activity safe or suppresses all detection types. [Entity and IP lists](https://docs.aws.amazon.com/guardduty/latest/ug/guardduty_upload-lists.html).
 
-Plain English:
+### 6.4 Organization Coverage Must Be Verified
 
-> Security Hub is the dashboard where many AWS security findings come together.
-
-Real-world example:
-
-Your organization has 80 AWS accounts. Findings come from:
-
-- GuardDuty
-- Inspector
-- Macie
-- IAM Access Analyzer
-- AWS Config / security standards
-- third-party security tools
-
-Instead of checking every service in every account, the security team uses Security Hub in a delegated security account.
-
-Simple flow:
+**Check all four dimensions**
 
 ```text
-GuardDuty findings
-Inspector findings
-Macie findings
-Access Analyzer findings
-Partner findings
-Security standards checks
-        |
-        v
-Security Hub
-        |
-        +-- Central view
-        +-- Prioritization
-        +-- Standards checks
-        +-- EventBridge actions
+Coverage check
+    |
+    +-- Accounts
+    +-- Regions
+    +-- Protection plans
+    +-- Telemetry health
+
+A central dashboard does not prove all four are complete.
 ```
 
-Exam angle:
+Use service-native organization administration through a security account. Verify existing accounts, new-account enrollment, all required Regions, and individual protection plans. An administrator view is not proof that every member has every plan enabled.
 
-Choose Security Hub when the question says:
+For a test, generate a sample finding and verify delivery through the alert pipeline. That tests routing, not whether your real workload supplies healthy runtime telemetry. Both tests are necessary when the requirement includes runtime detection.
 
-- aggregate findings
-- central security dashboard
-- security standards
-- compliance posture
-- multi-account findings
-- one place for GuardDuty, Macie, Inspector, and partner findings
+## 7. Findings, Posture, And Regular Assessments
 
-Important trap:
+### 7.1 Security Hub CSPM And Security Hub
 
-Security Hub is not the investigation graph tool. For relationship investigation, use **Detective**.
+#### Keep The Product And Format Together
 
----
+[Security Hub](00-aws-security-foundations-for-beginners.md#security-hub) naming has evolved. Security Hub CSPM provides security posture controls and findings aggregation in AWS Security Finding Format (ASFF). Current Security Hub adds broader unified prioritization and correlation.
 
-### 0.8 Detective: Security Investigation Graphs
+Identify the capability being requested rather than treating every mention of the product family as interchangeable. [Security Hub CSPM overview](https://docs.aws.amazon.com/securityhub/latest/userguide/what-is-securityhub.html), [Security Hub overview](https://docs.aws.amazon.com/securityhub/latest/userguide/what-is-securityhub-v2.html).
 
-Detective helps investigate suspicious activity and findings.
+Current Security Hub uses OCSF findings and can show attack-path relationships for exposure analysis. Therefore, "Security Hub always means ASFF" and "only Detective has any graph" are both unsafe shortcuts. Detective's behavior investigation and Security Hub's exposure context are different capabilities.
 
-Plain English:
+Read the scenario's product and task carefully.
 
-> Detective connects the dots between users, roles, IP addresses, EC2 instances, and findings.
-
-Real-world example:
-
-Security Hub shows a GuardDuty finding for a role. The analyst needs to know:
-
-- What API calls happened before and after?
-- What IP addresses were involved?
-- Which EC2 instance or IAM role is related?
-- Is this part of a bigger pattern?
-
-Use Detective.
-
-Simple flow:
+#### Follow The Assessment Lifecycle
 
 ```text
-GuardDuty / Security Hub finding
-        |
-        v
-Detective
-        |
-        v
-Behavior graph
-        |
-        +-- Users
-        +-- Roles
-        +-- IPs
-        +-- Instances
-        +-- API activity
+Resource recorded --> Control evaluated --> Finding / result
+                                                  |
+                                                  v
+                                          Workflow updated
+                                                  |
+                                        Resource actually fixed?
+                                                  |
+                                                  v
+                                           Re-evaluate state
+
+Closing the workflow does not perform the resource fix.
 ```
 
-Exam angle:
+For standards and control checks, understand dependencies. Many CSPM checks depend on AWS Config recording the relevant resources in the relevant Region.
 
-Choose Detective when the question says:
+Enabling a standard is not evidence that all prerequisites are correct. A finding marked resolved in a workflow is not proof the underlying resource was fixed; re-evaluation provides that evidence.
 
-- investigate finding
-- behavior graph
-- relationship graph
-- root cause of suspicious activity
-- connected users, IPs, resources, and findings
+Central configuration policies manage service/standard/control settings across selected organization accounts and Regions. Finding aggregation brings results together. These are different jobs: collecting findings from a Region does not itself enable every producer there. [Central configuration](https://docs.aws.amazon.com/securityhub/latest/userguide/central-configuration-intro.html).
 
-Do not choose Detective for:
+### 7.2 Config And State Manager: State Rather Than Attack Behavior
 
-- collecting findings from many services: Security Hub
-- SQL query over CloudTrail: CloudTrail Lake
-- S3 sensitive data discovery: Macie
+[AWS Config](00-aws-security-foundations-for-beginners.md#aws-config) records supported resource configurations and evaluates rules. CloudTrail might show who changed a security group; Config can show its recorded state and whether that state violates a rule. These perspectives complement each other.
 
----
+A [conformance pack](00-aws-security-foundations-for-beginners.md#conformance-pack) bundles Config rules and remediation definitions. An aggregator collects configuration/compliance views; it does not turn on recording in all accounts. Check recorder scope, rule triggers, and permissions when results are absent or stale. [How Config works](https://docs.aws.amazon.com/config/latest/developerguide/how-does-config-work.html).
 
-### 0.9 Security Lake: Security Data Lake With OCSF
+[State Manager](00-aws-security-foundations-for-beginners.md#regular-assessments-and-state-manager) applies a defined configuration to managed nodes through associations and schedules. For example, maintain a monitoring agent's desired configuration across a fleet. It is not a replacement for CloudTrail evidence or GuardDuty detection. [State Manager](https://docs.aws.amazon.com/systems-manager/latest/userguide/systems-manager-state.html).
 
-Security Lake centralizes security logs in S3 and normalizes them into OCSF.
+### 7.3 Sensitive Data, Vulnerabilities, And Access Are Separate Risks
 
-Plain English:
+| Question | Service | What still requires another control |
+| --- | --- | --- |
+| Does an S3 file contain sensitive identifiers? | Macie | Blocking inappropriate access or removing exposed data |
+| Does a supported workload contain a known vulnerable package? | Inspector | Patching and verifying the new state |
+| Does a supported resource policy permit access outside my trust boundary? | IAM Access Analyzer | Establishing whether anyone actually used that access |
+| Did activity look like an attack? | GuardDuty | Investigation and response |
 
-> Security Lake is a central lake of security logs, stored in a common format so tools can analyze them more easily.
+#### Macie: What Is Inside The Object?
 
-OCSF means Open Cybersecurity Schema Framework.
+[Macie](00-aws-security-foundations-for-beginners.md#macie) uses managed identifiers or custom patterns. An original custom-pattern idea is `CASE-[0-9]{8}` near the keyword `customer`. Context words reduce false positives compared with matching any eight digits.
 
-Simple meaning:
+Discovery jobs and automated discovery have different scope/sampling choices. A clean result means little if the object was excluded, unsupported, or unreadable because of permissions or encryption. [Discovery jobs](https://docs.aws.amazon.com/macie/latest/user/discovery-jobs.html).
 
-> OCSF makes different security logs look more consistent.
+#### Inspector: Is The Workload Vulnerable?
 
-Real-world example:
+[Inspector](00-aws-security-foundations-for-beginners.md#inspector) scans supported EC2, ECR, and Lambda resources using the relevant scan capabilities. Coverage and scan eligibility matter: "Inspector is enabled" does not prove that a particular image or function was scanned.
 
-A SOC wants one data lake for:
+EC2 agent-based and supported agentless approaches have different requirements; do not assume the SSM agent is universally required for every scan mode. [Inspector scan types](https://docs.aws.amazon.com/inspector/latest/user/scanning-resources.html).
 
-- CloudTrail
-- VPC Flow Logs
-- Route 53 Resolver logs
-- WAF logs
-- Security Hub findings
-- partner security logs
+#### Access Analyzer: Is Access Possible?
 
-They want to connect a SIEM or analytics tool and not manually normalize every log source.
+[IAM Access Analyzer](00-aws-security-foundations-for-beginners.md#iam-access-analyzer) analyzes access, not actual packet flows. An external-access finding establishes possible exposure through supported policies, not data theft. Use CloudTrail and application evidence to investigate use. Different analyzer types and features serve external/internal access, unused access, and policy validation/generation requirements.
 
-Use Security Lake.
+## 8. Investigate And Correlate
 
-Simple flow:
+### 8.1 Query Where The Evidence Lives
+
+[Query tools](00-aws-security-foundations-for-beginners.md#athena-cloudwatch-logs-insights-and-cloudtrail-lake) should be chosen from data location, shape, retention, and operational needs.
+
+| Situation | Starting choice | Work you still need |
+| --- | --- | --- |
+| Logs already in CloudWatch | Logs Insights | Correct log groups, time range, query, permissions |
+| Audit archive already in S3 | Athena | Table/schema, partitions, S3/KMS and result-location access |
+| Existing CloudTrail Lake store | Lake SQL | Correct store, selection scope, retention and access |
+| Logs already indexed in OpenSearch | OpenSearch queries / Security Analytics | Field mappings, detectors and notification setup |
+| Need a relationship view around suspicious entities | Detective | Relevant enabled data sources and account coverage |
+
+#### Picture The Query Path
 
 ```text
-AWS security logs + partner logs
-        |
-        v
+Table/schema --> Describes where and how to read files
+                         |
+                         v
+Query -------> Read selected S3 data --> Write query results
+                    |                          |
+               S3 + KMS access            Result access
+                    |                          |
+                    +---- Check separately ----+
+```
+
+In Athena, a **table** describes how to interpret files; it does not mean the files were copied into a separate database. A **partition** groups records, often by date/account/Region, so queries can avoid scanning everything.
+
+If the table points to the wrong prefix, a valid SQL query can return zero rows.
+
+Illustrative SQL, assuming a table named `audit_events` with the displayed string columns:
+
+```sql
+SELECT eventtime, eventname, sourceipaddress
+FROM audit_events
+WHERE eventsource = 's3.amazonaws.com'
+  AND eventname = 'GetObject'
+  AND eventtime >= '2026-10-09T00:00:00Z'
+ORDER BY eventtime DESC;
+```
+
+Real Athena CloudTrail tables may use different nested fields and partition columns. Match the schema and filter partitions. A query also needs somewhere to write its results; failure at the results bucket is different from lack of permission to read the source.
+
+### 8.2 Security Lake Normalizes; It Does Not Automatically Investigate
+
+[Security Lake](00-aws-security-foundations-for-beginners.md#security-lake) stores supported security sources in S3 using OCSF and Parquet. **OCSF** gives different security events a common structure. **Parquet** is a column-oriented file format useful for analytics.
+
+Choose supported native sources explicitly, such as CloudTrail management events, VPC Flow Logs, Resolver query logs, Security Hub CSPM findings, WAF logs, and supported EKS audit sources. Native source support is specific: do not assume selecting CloudTrail management events includes every S3 data event.
+
+Custom sources must meet the integration's schema and delivery requirements. [Native sources](https://docs.aws.amazon.com/security-lake/latest/userguide/internal-sources.html).
+
+Subscribers consume the lake through configured data access or query access. Collection, schema normalization, access grants, and the analytics tool are separate parts. A SIEM, or security information and event management system, searches/correlates security data and helps analysts handle alerts.
+
+#### Two Ways To Consume The Lake
+
+```text
 Security Lake
-        |
-        v
-OCSF-normalized data in S3
-        |
-        v
-SIEM / analytics / investigation tools
+     |
+     +-- Data access --> Object notification --> Read object
+     |
+     +-- Query access --> Lake Formation tables --> Query
+
+Both paths: check permitted source AND Region.
 ```
 
-Exam angle:
+Data-access subscribers receive notifications of new objects, through supported HTTPS or SQS mechanisms, and retrieve the permitted data. Query-access subscribers query Lake Formation tables with tools such as Athena.
 
-Choose Security Lake when the question says:
-
-- many security log sources
-- common schema
-- OCSF
-- security data lake
-- store security data in S3
-- integrate with SIEM
-
-Do not confuse:
+Access is scoped by source and Region; a rollup Region can collect contributing Regions for a regional subscriber. This is why "the subscriber exists" does not prove it can see every source everywhere. [Subscriber access](https://docs.aws.amazon.com/security-lake/latest/userguide/subscriber-management.html).
 
 ```text
-CloudTrail Lake = SQL over CloudTrail events
-Security Lake   = many security sources in OCSF format
+Supported AWS sources + correctly integrated custom sources
+                          |
+                          v
+                Security Lake normalization
+                          |
+                          v
+                S3 data organized for analysis
+                          |
+                          v
+             Authorized subscriber / query tool
 ```
 
----
+### 8.3 Correlation Requires Shared Context
 
-### 0.10 Macie: Sensitive Data Discovery In S3
+Correlation means connecting related observations. Preserve event time, ingestion time, account, Region, resource, identity/session, and request identifiers where available. Normalize time zones before comparing records. A shared NAT IP is weaker evidence than a matching request ID or role session.
 
-Macie discovers sensitive data in S3.
-
-Plain English:
-
-> Macie scans S3 objects and tells you if they contain sensitive data.
-
-Real-world examples:
-
-- A bucket contains customer passport numbers.
-- A data lake accidentally stores credit card numbers.
-- A company has a custom customer ID pattern like `CUST-1234567890`.
-- A security team wants to know which S3 buckets contain PII.
-
-Use Macie.
-
-Simple flow:
+An illustrative timeline:
 
 ```text
-S3 buckets and objects
-        |
-        v
-Macie sensitive data discovery
-        |
-        v
-Macie finding
-        |
-        +-- Security Hub
-        +-- EventBridge
-        +-- S3 discovery results repository
+09:00  CloudTrail: role session created
+09:02  CloudTrail data event: sensitive object read by that session
+09:03  App log: export job completed, same job identifier
+09:05  GuardDuty: unusual access behavior involving the role
 ```
 
-Custom identifier example:
+This sequence gives investigation leads. It does not prove the export was unauthorized; check the job owner, approved purpose, and actual result.
 
-```json
-{
-  "name": "CustomerIdPattern",
-  "regex": "CUST-[0-9]{10}",
-  "keywords": ["customer", "client", "cust_id"]
-}
-```
+#### Choose An Investigation View
 
-Exam angle:
+[Detective](00-aws-security-foundations-for-beginners.md#detective) provides entity relationships and behavior views for investigation. It does not replace preserving raw evidence. OpenSearch Security Analytics uses detectors and rules over indexed data; incorrect field mappings can prevent useful matches.
 
-Choose Macie when the question says:
+Managed Grafana visualizes data sources; it is not a substitute for collection or detection. Lambda can parse custom records, but a custom pipeline brings maintenance, permission, and failure-handling work.
 
-- sensitive data in S3
-- PII discovery
-- credit card numbers
-- national ID numbers
-- custom data identifiers
-- classify S3 object content
+Detective can also integrate with Security Lake to retrieve supported raw evidence. That is a configured integration, not automatic access to arbitrary S3 files.
 
-Do not choose Macie for vulnerability scanning. That is Inspector.
+In OpenSearch Security Analytics, connect the intended index, map its fields, choose relevant rules (including supported Sigma rules), and configure alerts; storing a log in an index alone does not activate a detector. [Detective integrations](https://docs.aws.amazon.com/detective/latest/userguide/what-is-detective.html), [OpenSearch Security Analytics](https://docs.aws.amazon.com/opensearch-service/latest/developerguide/security-analytics.html).
 
----
+## 9. EventBridge: Deliver The Alert Reliably
 
-### 0.11 Inspector: Vulnerability Management
+[EventBridge and notification services](00-aws-security-foundations-for-beginners.md#eventbridge-sns-sqs-and-lambda-together) connect detection with action. An **event bus** receives events, a **rule** matches selected events, and a **target** handles matched events.
 
-Inspector finds vulnerabilities in AWS workloads.
+### 9.1 Match The Actual Event Shape
 
-Plain English:
-
-> Inspector scans workloads and tells you which packages, container images, or Lambda functions have vulnerabilities.
-
-Real-world examples:
-
-- EC2 instance has an outdated OpenSSL package.
-- ECR container image has a critical CVE.
-- Lambda function has a vulnerable dependency.
-- Security team needs vulnerability findings across accounts.
-
-Use Inspector.
-
-Simple flow:
-
-```text
-EC2 / ECR / Lambda
-        |
-        v
-Inspector scan
-        |
-        v
-Vulnerability finding
-        |
-        +-- Security Hub
-        +-- EventBridge
-        +-- Reports / SBOM export
-```
-
-Exam angle:
-
-Choose Inspector when the question says:
-
-- EC2 vulnerability scanning
-- ECR image scanning
-- Lambda vulnerability scanning
-- software package CVEs
-- unintended network exposure
-- SBOM export
-
-Do not confuse:
-
-```text
-Inspector = vulnerability management
-GuardDuty = threat detection
-Macie     = sensitive data in S3
-```
-
----
-
-### 0.12 EventBridge: Event Routing And Automation Trigger
-
-EventBridge routes events to targets.
-
-Plain English:
-
-> EventBridge is the switchboard. When something happens, it sends the event to the right place.
-
-Real-world examples:
-
-- GuardDuty creates a high-severity finding.
-- Someone calls `StopLogging` on CloudTrail.
-- Security Hub custom action is triggered.
-- A scheduled rule runs every hour.
-
-EventBridge can route events to:
-
-- SNS
-- Lambda
-- Step Functions
-- SQS
-- Systems Manager Automation or Run Command
-- another event bus
-
-Simple flow:
-
-```text
-Event source
-GuardDuty / CloudTrail API event / Security Hub / custom app
-        |
-        v
-EventBridge rule
-        |
-        v
-Target
-SNS / Lambda / Step Functions / SSM / SQS
-```
-
-Example event pattern:
+An example rule for GuardDuty findings with severity at least 7:
 
 ```json
 {
   "source": ["aws.guardduty"],
   "detail-type": ["GuardDuty Finding"],
   "detail": {
-    "severity": [7, 8, 9]
+    "severity": [{ "numeric": [">=", 7] }]
   }
 }
 ```
 
-Exam angle:
+The numeric condition includes values such as 7.5. An exact-match list `[7, 8, 9]` misses fractional values and is not a general "7 or higher" condition. Event patterns must match the field types and nesting in the received event. [EventBridge comparisons](https://docs.aws.amazon.com/eventbridge/latest/userguide/eb-create-pattern-operators.html).
 
-Choose EventBridge when the question says:
-
-- when a finding appears, trigger something
-- when an API call happens, respond quickly
-- event-driven workflow
-- route findings to SNS/Lambda/Step Functions
-
----
-
-### 0.13 SNS: Notification Fanout
-
-SNS is a notification and pub/sub service.
-
-Plain English:
-
-> SNS sends a message to subscribers.
-
-Real-world examples:
-
-- CloudWatch alarm sends email to operations.
-- EventBridge sends GuardDuty finding notification to SNS.
-- SNS fans out one alert to email, Lambda, HTTPS endpoint, and SQS.
-
-Simple flow:
-
-```text
-CloudWatch alarm or EventBridge rule
-        |
-        v
-SNS topic
-        |
-        +-- Email
-        +-- Lambda
-        +-- SQS
-        +-- HTTPS endpoint
-```
-
-Exam angle:
-
-Choose SNS when the question says:
-
-- notify team
-- send alert
-- fan out message
-- alarm notification
-
-SNS is usually not the detector. It is the notification channel.
-
----
-
-### 0.14 Athena: SQL Queries Over Logs In S3
-
-Athena queries data in S3 using SQL.
-
-Plain English:
-
-> Athena lets you run SQL directly on files in S3.
-
-Real-world examples:
-
-- CloudTrail logs are delivered to S3.
-- VPC Flow Logs are delivered to S3.
-- ALB logs are delivered to S3.
-- You want to query them without loading them into a database.
-
-Use Athena.
-
-Simple flow:
-
-```text
-Logs in S3
-        |
-        v
-Glue table / schema
-        |
-        v
-Athena SQL query
-        |
-        v
-Investigation result
-```
-
-Example query idea:
-
-```sql
-SELECT sourceipaddress, eventname, count(*) AS calls
-FROM cloudtrail_logs
-WHERE eventtime > current_timestamp - interval '1' day
-GROUP BY sourceipaddress, eventname
-ORDER BY calls DESC;
-```
-
-Exam angle:
-
-Choose Athena when:
-
-- logs are already in S3
-- need SQL analysis
-- central S3 log bucket is mentioned
-
-Do not choose Athena just because SQL is mentioned if the question specifically says **CloudTrail Lake event data store**.
-
----
-
-### 0.15 IAM Access Analyzer: Access And Policy Analysis
-
-IAM Access Analyzer analyzes access paths and policies.
-
-Plain English:
-
-> Access Analyzer helps find who can access what, especially unintended external access or unused permissions.
-
-Real-world examples:
-
-- An S3 bucket policy accidentally allows another AWS account.
-- A KMS key is shared outside the organization.
-- A role has permissions it has not used in months.
-- A developer wants to validate whether an IAM policy is too broad.
-
-Simple flow:
-
-```text
-IAM/resource policy
-        |
-        v
-Access Analyzer
-        |
-        +-- External access finding
-        +-- Unused access finding
-        +-- Policy validation warning
-        +-- Least-privilege policy generation
-```
-
-Exam angle:
-
-Choose Access Analyzer when the question says:
-
-- external access
-- zone of trust
-- unused access
-- policy validation
-- generate least-privilege policy from CloudTrail activity
-
-Do not confuse:
-
-```text
-Access Analyzer = who can access what
-GuardDuty       = suspicious activity
-Security Hub    = finding aggregation
-Detective       = investigation graph
-```
-
----
-
-### 0.16 Quick Component Map
-
-Use this as your first-glance map:
-
-| Component | What it does | Real-world use | Exam memory hook |
-|---|---|---|---|
-| CloudTrail | Records AWS API calls | Who changed the bucket policy? | API audit trail |
-| CloudTrail Lake | SQL over CloudTrail events | Query API calls by role/IP/time | CloudTrail query store |
-| CloudWatch | Metrics, logs, alarms | Alert on error spike | Ops monitoring |
-| VPC Flow Logs | Network metadata | Which IP talked to which IP? | IP/port/allow-deny |
-| Resolver query logs | DNS queries | Which domains did EC2 query? | DNS names |
-| GuardDuty | Threat detection | Credential exfiltration finding | Suspicious behavior |
-| Security Hub | Findings aggregation | One dashboard across services/accounts | Central findings |
-| Detective | Investigation graph | What is related to this finding? | Relationship graph |
-| Security Lake | Security data lake | Normalize many logs for SIEM | OCSF in S3 |
-| Macie | Sensitive data in S3 | Find PII in buckets | S3 data discovery |
-| Inspector | Vulnerability scanning | CVEs in EC2/ECR/Lambda | Package vulnerabilities |
-| EventBridge | Event routing | Finding triggers workflow | If event, then target |
-| SNS | Notifications | Email/security alert | Send message |
-| Athena | SQL over S3 data | Query CloudTrail logs in S3 | S3 SQL |
-| Access Analyzer | Access analysis | External bucket/key access | Who can access what |
-
----
-
-## 1. What Detection Means In The Exam
-
-Detection is about answering this question:
-
-> Something happened in AWS. How do I notice it, collect evidence, route the alert, investigate it, and query the right logs?
-
-In the current question bank, Detection has **389 cards**. The repeated patterns are:
-
-| Area | Question-bank signal | What it means for study |
-|---|---:|---|
-| Logging design | 236 cards | Highest priority. Know which logs answer which question. |
-| Security service selection | 132 cards | Very high priority. Know GuardDuty vs Security Hub vs Detective vs Macie vs Inspector. |
-| Monitoring and alerting | 21 cards | Lower count, but still important for EventBridge, CloudWatch alarms, SNS, and automation. |
-
-The services that appeared most often in Detection-related material:
-
-| Service / concept | Approx. signal count | Priority |
-|---|---:|---|
-| CloudWatch / CloudWatch Logs / alarms | 117 | Very high |
-| CloudTrail / CloudTrail Lake | 111 | Very high |
-| GuardDuty | 84 | Very high |
-| Security Hub | 62 | Very high |
-| VPC Flow Logs | 40 | High |
-| Detective | 36 | High |
-| SNS | 34 | High |
-| Athena | 32 | High |
-| EventBridge | 31 | High |
-| Security Lake | 30 | High |
-| Macie | 27 | Medium-high |
-| Inspector | 27 | Medium-high |
-| Access Analyzer | 18 | Medium-high |
-| OCSF | 13 | Medium-high, newer SCS-C03 signal |
-| Route 53 Resolver query logs | 10 | Medium, but commonly tested as a log-source trap |
-
-Do not try to memorize every service page. For the exam, focus on choosing the **right evidence source** and the **right next service**.
-
----
-
-## 2. The Detection Mental Model
-
-Think of Detection as a pipeline:
-
-```text
-AWS activity or workload event
-        |
-        v
-Collect telemetry
-CloudTrail / VPC Flow Logs / DNS logs / app logs / service findings
-        |
-        v
-Detect or classify
-GuardDuty / Macie / Inspector / Access Analyzer / CloudWatch alarms
-        |
-        v
-Aggregate and normalize
-Security Hub / Security Lake / centralized S3 bucket
-        |
-        v
-Investigate
-Detective / CloudTrail Lake / Athena / CloudWatch Logs Insights
-        |
-        v
-Route or respond
-EventBridge -> SNS / Lambda / Step Functions / SSM Automation
-```
-
-Most exam questions are asking: **where in this pipeline are we?**
-
-Examples:
-
-- Need threat detection from CloudTrail, VPC Flow Logs, and DNS activity? Use **GuardDuty**.
-- Need one dashboard for findings from GuardDuty, Macie, Inspector, and partner tools? Use **Security Hub**.
-- Need behavior graphs and relationship investigation after a finding? Use **Detective**.
-- Need SQL queries over CloudTrail events? Use **CloudTrail Lake**.
-- Need a broad security data lake in S3 using a common schema? Use **Security Lake with OCSF**.
-- Need immediate workflow after an API call or finding? Use **EventBridge**.
-
----
-
-## 3. Highest-Return Topics For Detection
-
-### 3.1 CloudTrail Is The Main API Activity Log
-
-CloudTrail records AWS API activity.
-
-Simple definition:
-
-> CloudTrail tells you who called what AWS API, from where, and when.
-
-High-yield exam points:
-
-- CloudTrail **management events** record control-plane actions like `CreateUser`, `PutBucketPolicy`, `RunInstances`, or `StopLogging`.
-- CloudTrail **data events** record high-volume resource actions like S3 object-level `GetObject` and `PutObject`.
-- S3 object access is **not automatically included** just because CloudTrail is enabled.
-- For all accounts, use an **organization trail**.
-- For SQL-style queries over CloudTrail events with less setup, use **CloudTrail Lake**.
-- For API-call based immediate detection, use **EventBridge** when the event is available there.
-
-#### CloudTrail Decision Diagram
-
-```text
-Question asks about AWS API activity?
-        |
-        +-- Account/service configuration action?
-        |       Example: StopLogging, CreateUser, PutBucketPolicy
-        |       -> CloudTrail management event
-        |
-        +-- S3 object or Lambda function invocation level action?
-        |       Example: GetObject, PutObject
-        |       -> CloudTrail data event
-        |
-        +-- Need SQL queries over CloudTrail events?
-        |       -> CloudTrail Lake
-        |
-        +-- Need central long-term log bucket and external query engine?
-                -> CloudTrail to S3 + Athena
-```
-
-#### Example: CloudTrail Management Event
-
-```json
-{
-  "eventSource": "cloudtrail.amazonaws.com",
-  "eventName": "StopLogging",
-  "userIdentity": {
-    "type": "AssumedRole",
-    "arn": "arn:aws:sts::111122223333:assumed-role/Admin/session"
-  },
-  "sourceIPAddress": "203.0.113.10",
-  "eventTime": "2026-10-06T10:30:00Z"
-}
-```
-
-What the exam may ask:
-
-- "How do you detect someone stopping CloudTrail?"
-- Strong answer: **Create an EventBridge rule for the CloudTrail API event and trigger SNS/Lambda/Step Functions.**
-
-#### Example: S3 Object Access Trap
-
-If the question says:
-
-> We can see `PutBucketPolicy`, but we cannot see `GetObject`.
-
-The answer is usually:
-
-> Enable **CloudTrail S3 data events** for that bucket.
-
-Because:
-
-```text
-PutBucketPolicy = management event
-GetObject       = data event
-```
-
----
-
-### 3.2 GuardDuty Is Threat Detection
-
-GuardDuty is a managed threat detection service.
-
-Simple definition:
-
-> GuardDuty looks for suspicious activity using AWS logs and threat intelligence.
-
-It can use signals such as:
-
-- CloudTrail management events
-- VPC Flow Logs
-- DNS logs from supported DNS telemetry
-- EKS audit logs, if enabled
-- Malware Protection features, where configured
-- RDS/EBS/EKS/S3 protection plans, depending on setup and Region
-
-Exam pattern:
-
-```text
-Suspicious behavior, credential misuse, crypto mining, Tor, port probing,
-malicious IP/domain, unusual API calls
-        -> GuardDuty
-```
-
-#### GuardDuty Finding Flow
-
-```text
-CloudTrail / VPC Flow Logs / DNS activity
-        |
-        v
-GuardDuty detects suspicious behavior
-        |
-        v
-Finding created
-        |
-        +-- Send to Security Hub for aggregation
-        |
-        +-- Send to EventBridge for workflow
-                |
-                +-- SNS notification
-                +-- Lambda enrichment
-                +-- Step Functions containment workflow
-```
-
-#### Example: GuardDuty To EventBridge
-
-```json
-{
-  "source": ["aws.guardduty"],
-  "detail-type": ["GuardDuty Finding"],
-  "detail": {
-    "severity": [7, 8, 9]
-  }
-}
-```
-
-What this does:
-
-- Matches high-severity GuardDuty findings.
-- Routes them to a target such as SNS, Lambda, or Step Functions.
-
-Common exam answer:
-
-> GuardDuty finding -> EventBridge rule -> SNS/Lambda/Step Functions.
-
-#### GuardDuty Traps
-
-| Trap | Correct idea |
-|---|---|
-| "GuardDuty should block the attack directly" | GuardDuty detects; it does not usually enforce blocking by itself. Use EventBridge plus remediation. |
-| "GuardDuty DNS finding is missing for custom DNS" | DNS findings depend on supported DNS telemetry. Custom DNS can reduce visibility. |
-| "Internal scanner creates noisy findings" | Consider trusted IP lists or suppression rules, depending on the goal. |
-| "Need full packet payload" | GuardDuty does not give packet payloads. VPC Flow Logs give metadata only; Traffic Mirroring is for packet copies. |
-
----
-
-### 3.3 Security Hub Aggregates Findings
-
-Security Hub is a finding and posture aggregation service.
-
-Simple definition:
-
-> Security Hub is the central place to collect and view security findings and compliance checks.
-
-It can aggregate findings from:
-
-- GuardDuty
-- Inspector
-- Macie
-- IAM Access Analyzer
-- AWS Config / standards checks
-- Partner security tools
-
-High-yield exam points:
-
-- Use Security Hub when the question says **central dashboard**, **aggregate findings**, **security standards**, or **multi-account findings**.
-- Use an **AWS Organizations delegated administrator** for central management.
-- Security Hub findings use a common AWS finding format called **ASFF**.
-- Security Hub is not the same as Detective. Security Hub aggregates; Detective investigates relationships.
-
-#### Security Hub In One Picture
-
-```text
-GuardDuty findings
-Inspector vulnerability findings
-Macie sensitive-data findings
-Access Analyzer findings
-Partner tool findings
-        |
-        v
-Security Hub
-        |
-        +-- Dashboard and standards
-        +-- Central security account
-        +-- EventBridge custom action / finding routing
-```
-
-#### Example: Simplified Security Hub Finding
-
-```json
-{
-  "AwsAccountId": "111122223333",
-  "ProductName": "GuardDuty",
-  "Title": "UnauthorizedAccess:IAMUser/InstanceCredentialExfiltration",
-  "Severity": {
-    "Label": "HIGH"
-  },
-  "Resources": [
-    {
-      "Type": "AwsIamAccessKey",
-      "Id": "AKIA..."
-    }
-  ]
-}
-```
-
-Exam reading tip:
-
-If the question asks:
-
-> Where should we collect findings from many security services?
-
-Answer:
-
-> Security Hub.
-
-If the question asks:
-
-> How do we understand relationships between the principal, instance, IP address, and finding?
-
-Answer:
-
-> Detective.
-
----
-
-### 3.4 Detective Is For Investigation Graphs
-
-Detective helps investigate security findings.
-
-Simple definition:
-
-> Detective builds behavior graphs so you can understand what happened around a finding.
-
-Use Detective when the question says:
-
-- behavior graph
-- relationship graph
-- investigate related IPs, users, instances, and findings
-- analyze activity around a GuardDuty or Security Hub finding
-
-Do not choose Detective when:
-
-- You only need to run a SQL query over logs.
-- You need to classify sensitive data in S3.
-- You need vulnerability scanning.
-- You need to aggregate compliance findings.
-
-#### Detective vs Security Hub
-
-```text
-Security Hub = collect and prioritize findings
-Detective    = investigate relationships behind findings
-```
-
-Example:
-
-```text
-Security Hub shows a GuardDuty finding for an IAM role.
-You need to know:
-- Which IPs were involved?
-- Which API calls happened before and after?
-- Which EC2 instance or role is connected?
-
-Use Detective.
-```
-
----
-
-### 3.5 Security Lake And OCSF Are Newer High-Yield Topics
-
-Security Lake centralizes security data in an S3-backed data lake.
-
-Simple definition:
-
-> Security Lake collects security logs and stores them in a common schema for analysis.
-
-OCSF means **Open Cybersecurity Schema Framework**.
-
-Simple definition:
-
-> OCSF is a common format so logs from different sources look more consistent.
-
-Use Security Lake when the question says:
-
-- collect CloudTrail, VPC Flow Logs, Route 53 Resolver logs, WAF logs, and partner logs
-- normalize security data
-- common schema
-- OCSF
-- security data lake in S3
-- integrate with SIEM or analytics tools
-
-Do not confuse it with CloudTrail Lake.
-
-#### Security Lake vs CloudTrail Lake
-
-| Need | Choose |
-|---|---|
-| Query CloudTrail events with SQL and less setup | CloudTrail Lake |
-| Centralize many security log types in S3 | Security Lake |
-| Normalize logs into OCSF | Security Lake |
-| Investigate CloudTrail API activity only | CloudTrail Lake |
-| Query existing S3 logs manually | Athena |
-
-#### Simple Diagram
-
-```text
-CloudTrail
-VPC Flow Logs
-Route 53 Resolver logs
-WAF logs
-Partner logs
-        |
-        v
-Security Lake
-        |
-        v
-OCSF-normalized data in S3
-        |
-        v
-SIEM / analytics / investigation tools
-```
-
-#### Example: Simplified OCSF-Like Record
-
-```json
-{
-  "class_name": "API Activity",
-  "cloud": {
-    "provider": "AWS",
-    "account_uid": "111122223333"
-  },
-  "actor": {
-    "user": {
-      "name": "AdminRole"
-    }
-  },
-  "api": {
-    "service": "s3",
-    "operation": "PutBucketPolicy"
-  },
-  "severity": "Informational"
-}
-```
-
-You do not need to memorize OCSF fields. Know the **purpose**:
-
-> Security Lake normalizes security logs into OCSF for broad analysis.
-
----
-
-### 3.6 CloudWatch Is For Logs, Metrics, Alarms, And Quick Queries
-
-CloudWatch appears repeatedly because it sits close to operations.
-
-Use these mental shortcuts:
-
-| Need | Service / feature |
-|---|---|
-| Query logs already in CloudWatch Logs | CloudWatch Logs Insights |
-| Create an alarm from a metric threshold | CloudWatch alarm |
-| Notify someone from an alarm | CloudWatch alarm -> SNS |
-| Detect specific log text pattern | CloudWatch metric filter |
-| Mask sensitive values in log events | CloudWatch Logs data protection policy |
-
-#### CloudWatch Logs Insights Example
-
-Question:
-
-> Application logs already land in CloudWatch Logs. The team needs ad hoc filtering by request ID and source IP without moving logs.
-
-Answer:
-
-> CloudWatch Logs Insights.
-
-Example query:
-
-```sql
-fields @timestamp, sourceIp, requestId, @message
-| filter requestId = "req-123"
-| sort @timestamp desc
-| limit 20
-```
-
-#### CloudWatch Alarm Flow
-
-```text
-Metric crosses threshold
-        |
-        v
-CloudWatch alarm
-        |
-        v
-SNS topic
-        |
-        +-- Email
-        +-- Lambda
-        +-- Incident tool integration
-```
-
----
-
-### 3.7 VPC Flow Logs Are Network Metadata, Not Packet Payloads
-
-VPC Flow Logs capture network flow metadata.
-
-Simple definition:
-
-> VPC Flow Logs show who talked to whom over the network, but not the actual packet contents.
-
-They can show:
-
-- source IP
-- destination IP
-- port
-- protocol
-- bytes
-- accept/reject
-- interface ID
-
-They do not show:
-
-- HTTP headers
-- request body
-- full packet payload
-- DNS query names
-
-#### Example VPC Flow Log Record
-
-```text
-version account-id interface-id srcaddr dstaddr srcport dstport protocol packets bytes start end action log-status
-2 111122223333 eni-abc123 10.0.1.10 198.51.100.20 44321 443 6 10 8400 1760000000 1760000060 ACCEPT OK
-```
-
-Exam traps:
-
-| Question clue | Correct choice |
-|---|---|
-| Accepted/rejected traffic metadata | VPC Flow Logs |
-| Full packet inspection / copy packets to IDS | VPC Traffic Mirroring, usually Infrastructure topic |
-| DNS query names from VPC resolver | Route 53 Resolver query logs |
-| API calls | CloudTrail |
-
----
-
-### 3.8 Route 53 Resolver Query Logs Are For DNS Questions
-
-Route 53 Resolver query logs capture DNS queries made by resources using the VPC resolver.
-
-Use them when the question says:
-
-- DNS queries
-- domain lookups from EC2
-- suspicious domain
-- DNS tunneling investigation
-- which domains workloads are resolving
-
-Simple flow:
-
-```text
-EC2 instance asks: malicious.example.com?
-        |
-        v
-VPC Route 53 Resolver
-        |
-        v
-Resolver query log
-        |
-        v
-CloudWatch Logs / S3 / Kinesis Data Firehose
-```
-
-Important trap:
-
-> If workloads use a custom DNS server instead of the VPC resolver, GuardDuty DNS visibility and Resolver query logging may not behave the way the question expects.
-
----
-
-### 3.9 Macie Is For Sensitive Data In S3
-
-Macie discovers sensitive data in S3.
-
-Simple definition:
-
-> Macie scans S3 objects to find sensitive data such as PII, credentials, and custom patterns.
-
-Use Macie when the question says:
-
-- sensitive data discovery
-- PII in S3
-- credit card numbers in S3
-- national ID numbers in S3
-- custom data identifier
-- data classification
-
-Do not choose Macie for:
-
-- EC2 vulnerability scanning
-- threat detection from API calls
-- centralized finding aggregation
-- graph investigation
-
-#### Macie Custom Identifier Example
-
-Suppose your company has customer IDs like:
-
-```text
-CUST-1234567890
-```
-
-Macie custom data identifier could use a pattern like:
-
-```json
-{
-  "name": "CompanyCustomerId",
-  "regex": "CUST-[0-9]{10}",
-  "keywords": ["customer", "cust_id", "client"]
-}
-```
-
-Exam clue:
-
-> Proprietary sensitive pattern in S3.
-
-Answer:
-
-> Macie custom data identifier.
-
----
-
-### 3.10 Inspector Is Vulnerability Management
-
-Inspector finds software/package vulnerabilities and exposure risks.
-
-Simple definition:
-
-> Inspector scans workloads for vulnerabilities.
-
-Use Inspector for:
-
-- EC2 vulnerability findings
-- ECR container image vulnerabilities
-- Lambda function vulnerabilities
-- package/CVE scanning
-- SBOM export
-
-Do not confuse:
-
-| Need | Choose |
-|---|---|
-| Threat detection from logs | GuardDuty |
-| Vulnerability/package scanning | Inspector |
-| Sensitive data in S3 | Macie |
-| Finding aggregation | Security Hub |
-| Relationship investigation | Detective |
-
-Exam pattern:
-
-> "Which service detects package/software vulnerabilities for EC2, ECR, and Lambda?"
-
-Answer:
-
-> Inspector.
-
----
-
-### 3.11 EventBridge Is The Router For Events
-
-EventBridge routes events to targets.
-
-Simple definition:
-
-> EventBridge watches for events and starts the next action.
-
-Use EventBridge when the question says:
-
-- trigger remediation within seconds
-- react to an API call
-- route GuardDuty findings
-- send finding to SNS/Lambda/Step Functions
-- event-driven automation
-
-#### EventBridge API Detection Flow
-
-```text
-User calls cloudtrail:StopLogging
-        |
-        v
-CloudTrail event appears
-        |
-        v
-EventBridge rule matches StopLogging
-        |
-        +-- SNS alert to security team
-        +-- Lambda to re-enable logging
-        +-- Step Functions response workflow
-```
-
-#### EventBridge Rule Example
+For logging-tamper detection, an illustrative pattern is:
 
 ```json
 {
@@ -1588,688 +775,733 @@ EventBridge rule matches StopLogging
   "detail-type": ["AWS API Call via CloudTrail"],
   "detail": {
     "eventSource": ["cloudtrail.amazonaws.com"],
-    "eventName": ["StopLogging", "DeleteTrail"]
+    "eventName": ["StopLogging", "DeleteTrail", "UpdateTrail", "PutEventSelectors"]
   }
 }
 ```
 
-Exam clue:
+This intentionally detects attempts too. Inspect `errorCode` before concluding the configuration actually changed. Monitor more than `StopLogging`: changing selectors can remove evidence without deleting a trail.
 
-> Need immediate detection and workflow after a specific API call.
+CloudTrail-mediated EventBridge events require an active trail with appropriate selection. Read-only management events require the rule state `ENABLED_WITH_ALL_CLOUDTRAIL_MANAGEMENT_EVENTS`; ordinary enabled rules do not generally include them. Account, Region, bus, category, and rule state all matter. [CloudTrail event delivery](https://docs.aws.amazon.com/eventbridge/latest/userguide/eb-service-event-cloudtrail.html).
 
-Answer:
-
-> EventBridge rule for the API event.
-
----
-
-## 4. The Most Important Service Comparisons
-
-### 4.1 GuardDuty vs Security Hub vs Detective
+### 9.2 A Matched Rule Is Only Half The Journey
 
 ```text
-GuardDuty   = detects suspicious activity
-Security Hub = collects and prioritizes findings
-Detective   = investigates relationships around findings
+Finding exists
+     |
+     v
+Correct bus/Region --> Pattern matches --> Target permission valid?
+                                              |
+                         +--------------------+-------------------+
+                         |                                        |
+                         v                                        v
+                   Target accepts                          Delivery fails
+                         |                                        |
+                         v                                        v
+                  Handler succeeds?                         Retry / DLQ
 ```
 
-Example:
+The required permission depends on the target. For example, Lambda needs an invocation permission for EventBridge, and SNS needs the appropriate topic policy. Encrypted targets may introduce KMS permissions. A cross-account bus additionally needs permission to receive forwarded events.
+
+Configure retries and a supported SQS dead-letter queue (DLQ) for undelivered target events. The queue also needs permission for EventBridge to write to it. Monitor it and define how to correct and replay failures. [EventBridge DLQs](https://docs.aws.amazon.com/eventbridge/latest/userguide/eb-rule-dlq.html).
+
+Delivery success is not the same as business success. Once Lambda accepts an asynchronous invocation, later handler failures need Lambda's own failure handling; an EventBridge delivery DLQ is not a universal catch-all for application errors.
+
+Make actions **idempotent**: handling a duplicate must not create a second destructive action or duplicate ticket. A stable finding ID plus action state is often useful.
+
+### 9.3 Test Each Boundary
 
 ```text
-Question: Suspicious credential use from unusual country?
-Answer: GuardDuty
-
-Question: Central dashboard for GuardDuty, Inspector, Macie, partner findings?
-Answer: Security Hub
-
-Question: Graph of related IPs, users, roles, and instances after a finding?
-Answer: Detective
+Finding exists?
+    |
+    v
+Not suppressed? --> Correct bus? --> Rule matches?
+                                         |
+                                         v
+                                 SNS publish permitted?
+                                         |
+                                         v
+                                 Subscriber confirmed?
+                                         |
+                                         v
+                                 Notification received?
 ```
 
-### 4.2 CloudTrail Lake vs Security Lake vs Athena
+For a finding-to-email path, verify: the finding exists, is not suppressed, reaches the right bus, matches the rule, can be published to SNS, and has a confirmed subscriber. For encrypted SNS, inspect the relevant key permissions too.
+
+Use sample findings to test routing. Then verify actual source coverage separately. Also monitor delivery latency, failed invocations, and log-ingestion gaps. A silent pipeline is not proof of a quiet environment.
+
+## 10. Troubleshoot Service Logging
+
+The most useful troubleshooting method is to locate the first missing handoff. Do not broaden permissions everywhere at once.
 
 ```text
-CloudTrail Lake = SQL over CloudTrail events
-Security Lake   = many security logs normalized into OCSF in S3
-Athena          = SQL over data already stored in S3
+Did the action happen?
+   -> Is this the right evidence source?
+   -> Was collection enabled at that time and scope?
+   -> Could the producer read/create the log?
+   -> Could it authenticate, authorize, and reach the destination?
+   -> Was data delivered but filtered, delayed, expired, or queried incorrectly?
+   -> Did the detector, alarm, and target work?
 ```
 
-Decision shortcut:
+### 10.1 Lambda Logs
+
+Lambda logging depends on the execution role's relevant CloudWatch Logs permissions, including creating streams and putting events, plus log-group creation if required. Check the configured destination, log-level filters, invocation evidence, and delivery delay before assuming no logs means no execution.
+
+Adding an EC2 CloudWatch agent is not the remedy for Lambda service logging. [Lambda logs](https://docs.aws.amazon.com/lambda/latest/dg/monitoring-cloudwatchlogs.html).
+
+### 10.2 API Gateway Logs
 
 ```text
-Only CloudTrail events and managed SQL store?
-        -> CloudTrail Lake
-
-Many security sources + OCSF + S3 data lake?
-        -> Security Lake
-
-Logs already in S3 and need SQL queries?
-        -> Athena
-```
-
-### 4.3 CloudWatch Logs Insights vs Athena
-
-```text
-Logs are in CloudWatch Logs
-        -> CloudWatch Logs Insights
-
-Logs are in S3
-        -> Athena
-```
-
-### 4.4 Macie vs Inspector
-
-```text
-Macie    = sensitive data in S3
-Inspector = vulnerabilities in workloads/packages
-```
-
-### 4.5 VPC Flow Logs vs Route 53 Resolver Logs
-
-```text
-VPC Flow Logs              = network metadata: IP, port, allow/deny
-Route 53 Resolver logs     = DNS query names
-```
-
-### 4.6 Access Analyzer In Detection Questions
-
-IAM Access Analyzer sometimes appears in Detection because it finds unintended access.
-
-Use Access Analyzer for:
-
-- external access findings
-- unused access analysis
-- policy validation
-- policy generation from CloudTrail activity
-
-But remember:
-
-```text
-Access Analyzer = access/policy analysis
-GuardDuty       = threat detection
-Security Hub    = finding aggregation
-Detective       = investigation graph
-```
-
----
-
-## 5. Exam-Style Decision Tree
-
-Use this when reading a Detection question:
-
-```text
-What is the question asking for?
-
-1. Suspicious activity or threat?
-   -> GuardDuty
-
-2. One place to collect security findings?
-   -> Security Hub
-
-3. Relationship graph / investigation after finding?
-   -> Detective
-
-4. API activity?
-   -> CloudTrail
-
-5. SQL over CloudTrail events?
-   -> CloudTrail Lake
-
-6. S3 object-level API activity?
-   -> CloudTrail data events
-
-7. Logs already in CloudWatch?
-   -> CloudWatch Logs Insights
-
-8. Logs already in S3?
-   -> Athena
-
-9. Broad security data lake with normalized schema?
-   -> Security Lake + OCSF
-
-10. Sensitive data in S3?
-    -> Macie
-
-11. Software/package vulnerabilities?
-    -> Inspector
-
-12. Network metadata?
-    -> VPC Flow Logs
-
-13. DNS query names?
-    -> Route 53 Resolver query logs
-
-14. Immediate event-driven response?
-    -> EventBridge -> SNS/Lambda/Step Functions
-```
-
----
-
-## 6. Organization-Wide Detection Setup
-
-Many SCS-C03 questions are multi-account.
-
-The repeated answer pattern:
-
-> Use AWS Organizations delegated administrator and auto-enable features where supported.
-
-### Organization Detection Architecture
-
-```text
-AWS Organizations
-        |
-        +-- Management account
-        |
-        +-- Security tooling account
-        |       |
-        |       +-- GuardDuty delegated admin
-        |       +-- Security Hub delegated admin
-        |       +-- Macie delegated admin
-        |       +-- Inspector delegated admin
-        |
-        +-- Member account A
-        +-- Member account B
-        +-- Member account C
-```
-
-Key exam points:
-
-- Avoid daily security operations from the management account.
-- Use a delegated security account.
-- Enable services across accounts and Regions where required.
-- Configure auto-enable for new accounts when supported.
-- Use centralized CloudTrail organization trails for API logging.
-
-### Centralized CloudTrail Pattern
-
-```text
-Member accounts
-        |
-        v
-Organization CloudTrail
-        |
-        v
-Central S3 log bucket
-        |
-        +-- Athena queries
-        +-- Security Lake ingestion
-        +-- Long-term archive
-```
-
----
-
-## 7. High-Yield Traps
-
-| Trap | Correct thinking |
-|---|---|
-| "CloudTrail is enabled, but S3 GetObject is missing." | Enable S3 data events. |
-| "Need DNS query names." | Route 53 Resolver query logs, not VPC Flow Logs. |
-| "Need network packet payload." | VPC Flow Logs are not enough; they only show metadata. |
-| "Need to investigate relationships around a finding." | Detective, not Security Hub. |
-| "Need to aggregate findings." | Security Hub, not Detective. |
-| "Need broad normalized data lake." | Security Lake with OCSF, not CloudTrail Lake. |
-| "Need SQL over CloudTrail events." | CloudTrail Lake. |
-| "Need SQL over logs in S3." | Athena. |
-| "Need PII discovery in S3." | Macie. |
-| "Need EC2/ECR/Lambda vulnerability scanning." | Inspector. |
-| "Need immediate action from GuardDuty finding." | EventBridge routing. |
-| "GuardDuty DNS finding missing with custom DNS." | GuardDuty may not see DNS the same way if VPC resolver telemetry is bypassed. |
-| "Need all accounts covered." | Delegated admin plus organization setup or auto-enable. |
-| "Need to know if a bucket/role is shared externally." | IAM Access Analyzer. |
-| "Need alarm from metric threshold." | CloudWatch alarm, usually with SNS. |
-
----
-
-## 8. Fast Memory Tables
-
-### 8.1 Logs And Evidence Sources
-
-| Evidence needed | Use |
-|---|---|
-| AWS API calls | CloudTrail |
-| S3 object-level access | CloudTrail data events |
-| SQL over CloudTrail | CloudTrail Lake |
-| Logs already in CloudWatch | CloudWatch Logs Insights |
-| Logs in S3 | Athena |
-| Network allow/deny metadata | VPC Flow Logs |
-| DNS query names | Route 53 Resolver query logs |
-| Security data lake / OCSF | Security Lake |
-| Findings dashboard | Security Hub |
-
-### 8.2 Detection Services
-
-| Service | One-line exam meaning |
-|---|---|
-| GuardDuty | Suspicious activity and threat detection |
-| Security Hub | Central findings and standards dashboard |
-| Detective | Investigation graph after findings |
-| Macie | Sensitive data discovery in S3 |
-| Inspector | Vulnerability scanning for workloads |
-| Access Analyzer | External/unused access and policy analysis |
-| CloudTrail | AWS API audit history |
-| CloudWatch | Metrics, logs, alarms, quick log queries |
-| EventBridge | Event routing to response targets |
-
----
-
-## 9. Worked Examples
-
-### Example 1: Someone Stopped CloudTrail
-
-Question:
-
-> The security team must know within seconds when someone calls `StopLogging` on an organization trail.
-
-Think:
-
-```text
-Specific AWS API call
-Need near-real-time response
-```
-
-Answer:
-
-```text
-EventBridge rule matching CloudTrail API event
-Target: SNS/Lambda/Step Functions
-```
-
-Why not CloudTrail Lake?
-
-CloudTrail Lake is good for investigation and SQL queries, but the question says **within seconds**.
-
----
-
-### Example 2: S3 Object Delete Is Missing
-
-Question:
-
-> A bucket object was deleted, but CloudTrail only shows bucket-level actions.
-
-Think:
-
-```text
-Object-level S3 activity = CloudTrail data event
-```
-
-Answer:
-
-```text
-Enable S3 data events for the bucket.
-```
-
----
-
-### Example 3: Finding Aggregation vs Investigation
-
-Question:
-
-> Security Hub shows a GuardDuty finding. The analyst needs a graph of related users, IPs, and resources.
-
-Think:
-
-```text
-Security Hub already has finding.
-Need relationship graph.
-```
-
-Answer:
-
-```text
-Amazon Detective
-```
-
----
-
-### Example 4: Broad Security Data Lake
-
-Question:
-
-> The SOC wants CloudTrail, VPC Flow Logs, Route 53 Resolver logs, WAF logs, and partner logs in a common schema.
-
-Think:
-
-```text
-Many sources + common schema = Security Lake + OCSF
-```
-
-Answer:
-
-```text
-Amazon Security Lake
-```
-
----
-
-### Example 5: Suspicious Domain Lookup
-
-Question:
-
-> GuardDuty reports communication with a malicious domain. Which log helps investigate domain lookups from VPC workloads?
-
-Think:
-
-```text
-Domain lookup = DNS query
-```
-
-Answer:
-
-```text
-Route 53 Resolver query logs
-```
-
----
-
-## 10. What To Practice In The Portal
-
-For Detection, practice in this order:
-
-1. **CloudTrail and CloudTrail data events**
-   - management vs data events
-   - organization trails
-   - CloudTrail Lake
-   - StopLogging / DeleteTrail detection
-
-2. **GuardDuty**
-   - finding flow
-   - EventBridge integration
-   - organization auto-enable
-   - DNS visibility traps
-   - trusted IP vs suppression
-
-3. **Security Hub vs Detective**
-   - aggregate vs investigate
-   - delegated admin
-   - findings and standards
-
-4. **Security Lake / OCSF**
-   - broad security data lake
-   - normalized schema
-   - difference from CloudTrail Lake
-
-5. **Log source selection**
-   - VPC Flow Logs
-   - Route 53 Resolver query logs
-   - CloudWatch Logs Insights
-   - Athena
-
-6. **Macie / Inspector / Access Analyzer**
-   - sensitive data vs vulnerabilities vs access analysis
-
-7. **Event routing**
-   - EventBridge to SNS/Lambda/Step Functions
-   - CloudWatch alarms to SNS
-
----
-
-## 11. Quick Last-Day Revision
-
-Read this aloud:
-
-```text
-CloudTrail records API calls.
-CloudTrail data events are needed for S3 object access.
-CloudTrail Lake queries CloudTrail events.
-Security Lake stores many security logs in OCSF format.
-GuardDuty detects threats.
-Security Hub aggregates findings.
-Detective investigates relationships.
-Macie finds sensitive data in S3.
-Inspector finds vulnerabilities.
-VPC Flow Logs show network metadata, not packet payloads.
-Route 53 Resolver logs show DNS queries.
-CloudWatch Logs Insights queries CloudWatch logs.
-Athena queries logs in S3.
-EventBridge routes findings and API events to response workflows.
-For multi-account detection, use delegated admin and organization setup.
-```
-
----
-
-## 12. Mini Practice Set
-
-### Q1
-
-You need SQL queries over CloudTrail events with minimal pipeline setup. What do you use?
-
-**Answer:** CloudTrail Lake.
-
-### Q2
-
-You need CloudTrail, VPC Flow Logs, Route 53 Resolver logs, and partner logs in a common schema. What do you use?
-
-**Answer:** Security Lake with OCSF.
-
-### Q3
-
-GuardDuty finds credential exfiltration and you need an automatic response workflow. What is the pattern?
-
-**Answer:** GuardDuty finding -> EventBridge -> Lambda/Step Functions/SNS.
-
-### Q4
-
-Security Hub shows a finding, and you need a graph of related entities. What do you use?
-
-**Answer:** Detective.
-
-### Q5
-
-S3 `GetObject` activity is missing from CloudTrail. What should you enable?
-
-**Answer:** S3 data events.
-
-### Q6
-
-You need to know which domains an EC2 instance queried through the VPC resolver. What log source do you use?
-
-**Answer:** Route 53 Resolver query logs.
-
-### Q7
-
-You need accepted/rejected traffic metadata for ENIs. What do you use?
-
-**Answer:** VPC Flow Logs.
-
-### Q8
-
-You need to find proprietary customer IDs inside S3 objects. What do you use?
-
-**Answer:** Macie custom data identifiers.
-
-### Q9
-
-You need vulnerability findings for EC2, ECR images, and Lambda functions. What do you use?
-
-**Answer:** Inspector.
-
-### Q10
-
-You need one place to collect GuardDuty, Inspector, Macie, and partner findings across accounts. What do you use?
-
-**Answer:** Security Hub with delegated administration.
-
----
-
-## 13. When You Are Confused, Ask These Three Questions
-
-1. **Is this about raw evidence, detection, aggregation, or investigation?**
-
-```text
-Evidence      -> CloudTrail / VPC Flow Logs / Resolver logs / CloudWatch logs
-Detection     -> GuardDuty / Macie / Inspector / Access Analyzer
-Aggregation   -> Security Hub / Security Lake
-Investigation -> Detective / CloudTrail Lake / Athena / Logs Insights
-```
-
-2. **Where are the logs stored?**
-
-```text
-CloudWatch Logs -> Logs Insights
-S3              -> Athena
-CloudTrail Lake -> CloudTrail Lake query
-Security Lake   -> OCSF/S3-backed analytics
-```
-
-3. **Does the question ask for immediate action?**
-
-```text
-Yes -> EventBridge / CloudWatch alarm / SNS / Lambda / Step Functions
-No  -> Query or investigate with the right analysis service
-```
-
----
-
-## 14. Detection Master Diagram
-
-```text
-                          +----------------------+
-                          | AWS activity happens |
-                          +----------+-----------+
-                                     |
-                 +-------------------+-------------------+
-                 |                   |                   |
-                 v                   v                   v
-          API activity          Network traffic       DNS queries
-          CloudTrail            VPC Flow Logs         Resolver logs
-                 |                   |                   |
-                 +-------------------+-------------------+
+Request --> API stage --> Authorizer --> Backend Lambda
+                             |
+                             +-- Denied here?
                                      |
                                      v
-                           +-------------------+
-                           | GuardDuty         |
-                           | threat detection  |
-                           +---------+---------+
-                                     |
-                                     v
-                           +-------------------+
-                           | Security Hub      |
-                           | findings + checks |
-                           +---------+---------+
-                                     |
-                 +-------------------+-------------------+
-                 |                                       |
-                 v                                       v
-          Detective graphs                       EventBridge routing
-          investigation                          SNS/Lambda/Step Functions
+                             No backend invocation
 
-
-Other parallel paths:
-
-S3 object content  -> Macie
-Workload packages  -> Inspector
-External access    -> Access Analyzer
-Many security logs -> Security Lake + OCSF
-CloudTrail SQL     -> CloudTrail Lake
-S3 log SQL         -> Athena
-CloudWatch log SQL -> Logs Insights
+Inspect the layer that handled or rejected the request.
 ```
 
----
+For REST APIs, execution logs help debug processing; access logs record selected request context. Check stage-level settings, the CloudWatch role configuration, and destination permissions. HTTP APIs have different logging capabilities; do not copy REST execution-logging assumptions blindly.
 
-## 15. Final Audit Addendum: Thin Detection Topics
+Include correlation identifiers and status in access-log formats. A request denied by an authorizer may never reach the backend, so an empty Lambda application log is not evidence that the API received no request.
 
-This section was added after rechecking the full question bank and important-topic matrix.
+Avoid unnecessary body/data tracing when it could expose credentials or personal information. [REST API logging](https://docs.aws.amazon.com/apigateway/latest/developerguide/set-up-logging.html).
 
-### 15.1 CloudTrail Insights
+### 10.3 CloudFront, WAF, And Load Balancers
 
-CloudTrail Insights detects unusual API call rate or unusual API error rate activity by analyzing CloudTrail management events.
+CloudFront viewer access logs answer questions about edge requests. They are not the same as CloudTrail distribution-configuration events. Check the selected standard-logging version and destination; legacy delivery prerequisites should not be assumed for every newer destination. Real-time logs have their own configuration and sampling. [CloudFront logging](https://docs.aws.amazon.com/AmazonCloudFront/latest/DeveloperGuide/AccessLogs.html).
 
-Plain English:
+WAF logs explain rule actions, while load-balancer access logs describe requests observed at the load balancer. A WAF-blocked request may not reach the application at all. In a layered design, compare logs from the layer that actually handled or rejected the request.
 
-> CloudTrail shows API activity. CloudTrail Insights highlights API activity that suddenly looks abnormal for that account.
+### 10.4 Troubleshooting Matrix
 
-Real-world example:
+| Symptom | First useful checks | Misleading fix |
+| --- | --- | --- |
+| S3 download absent from trail | Data-event selector, bucket/prefix, time enabled | Turn on more management events |
+| Trail exists but archive stops growing | Trail status, S3 prefix policy, KMS key state/permissions | Assume organization membership proves delivery |
+| EC2 CPU exists but application logs do not | Agent, file path/read access, IAM, endpoints | Enable detailed EC2 metrics |
+| Logs exist but metric never changes | Filter match, metric namespace/dimensions, new ingestion | Reinstall an already-working log agent |
+| Alarm is stuck in insufficient data | Correct series, evaluation periods, missing-data policy | Lower threshold blindly |
+| GuardDuty findings absent centrally | Member/Region/plan coverage, suppression, forwarding | Trust the central dashboard alone |
+| EventBridge rule matches but email absent | Target policy, KMS, SNS confirmation, delivery metrics | Change the event pattern again |
+| Athena returns zero rows | Prefix, partitions, event time, collection scope | Give administrator access |
+| Athena query cannot write results | Result bucket/KMS and workgroup configuration | Change the source event selector |
+| DNS behavior missing | Resolver path, VPC association, cache, destination permissions | Expect Flow Logs to contain DNS names |
 
-An account normally has almost no `DeleteBucket` calls. Suddenly it has many `DeleteBucket` calls in a short time. CloudTrail Insights can create an Insights event showing the start and end of the unusual activity.
-
-Simple flow:
+## 11. Worked Design: A Payments Company
 
 ```text
-CloudTrail management events
-      |
-      v
-CloudTrail Insights analysis
-      |
-      +--> normal API pattern: no Insights event
-      +--> unusual API call/error rate: Insights event
+APPLICATION ACCOUNTS: 30 accounts / 2 Regions
+     |
+     +-- API audit -----------> Restricted log archive
+     +-- App / network logs --> Searchable evidence
+     +-- GuardDuty / posture -> Findings
+                                  |
+                                  v
+                           EventBridge --> Triage
+                                               |
+                                               v
+                                       Approved response
+
+SECURITY TEAM
+     +-- Query evidence
+     +-- Verify coverage and delivery
+     +-- Verify fixes, not just closed tickets
 ```
 
-Exam angle:
+The company has 30 accounts in two enabled Regions. It stores sensitive exports in S3, runs private EC2 workers and Lambda APIs, and needs a year of audit evidence. The security team needs central investigations and timely alerts without giving application teams permission to erase evidence.
 
-Choose CloudTrail Insights when the question says:
+### 11.1 Translate Requirements Into Separate Controls
 
-- unusual API call volume
-- unusual API error rate
-- baseline compared to normal account API behavior
-- CloudTrail-native anomaly around management events
+#### 1. Preserve API Evidence
 
-Common trap:
+Start with an organization multi-Region trail to a restricted archive account. Add data events for sensitive export objects. Apply retention, encryption, access separation, and validation appropriate to the evidence requirement. Confirm that both Regions and new accounts are covered.
 
-CloudTrail Insights is not GuardDuty. GuardDuty is broader threat detection using multiple data sources. CloudTrail Insights is specifically about unusual CloudTrail API activity patterns.
+#### 2. Collect Workload And Network Evidence
 
-### 15.2 OpenSearch Security Analytics
+Collect worker application/security files using configured agents. Enable the relevant Lambda and API logs, and use request IDs to join application observations. Configure VPC and Resolver logging where needed; do not use a successful API audit trail as evidence of complete network visibility.
 
-OpenSearch Security Analytics detects security threats from log data inside OpenSearch.
+#### 3. Detect And Route Actionable Findings
 
-Plain English:
+Enable GuardDuty with the plans required by the workloads and verify member coverage. Configure Security Hub CSPM for the posture baseline with the relevant Config recording. Route actionable findings through EventBridge to notification/triage.
 
-> OpenSearch Security Analytics is a SIEM-style feature for logs already indexed in OpenSearch.
+Keep application remediation separate enough to require approval where a false positive could interrupt payments.
 
-Real-world example:
+#### 4. Give Analysts The Right Query Path
 
-A company sends authentication logs and firewall logs into OpenSearch. Security Analytics uses detectors and rules, including Sigma-style rules, to generate findings and alerts for brute-force login attempts or suspicious access patterns.
+Use Athena for archive investigations and Logs Insights for operational logs. Add Security Lake if common-schema, multi-source analytics is an actual requirement; it is not mandatory merely because the organization has many accounts.
 
-Simple flow:
+### 11.2 Demonstrate That The Design Works
 
-```text
-Security logs in OpenSearch indexes
-      |
-      v
-Security Analytics detector
-      |
-      v
-Rules match suspicious patterns
-      |
-      +--> Finding
-      +--> Alert/notification
-```
+Generate a harmless administrative change and a test-object read in a sandbox. Confirm each appears in its expected log category. Write a test application log and verify collection. Generate a sample finding, verify the notification, and check the final destination rather than only the rule.
 
-Exam angle:
+Review who can change the trail, archive policy, retention, and KMS key. Test the documented investigation role's ability to read and decrypt evidence. Test failure monitoring as well as the happy path.
 
-Choose OpenSearch Security Analytics when the question says:
+**Changed requirement:** The company now needs exact HTTP request bodies for a debugging task. The design above does not suddenly provide them. Select appropriate application instrumentation with deliberate redaction and access control. Flow Logs and CloudTrail are not general-purpose request-body recordings.
 
-- existing logs are in OpenSearch
-- detect threats from indexed logs
-- Sigma rules
-- OpenSearch findings and alerts
+## 12. Original Scenario Practice
 
-Common trap:
+These questions train reasoning about constraints. Cover the answer before reading it. For each scenario, explain why the nearest plausible alternative fails.
 
-Do not choose OpenSearch Security Analytics just because the word "analytics" appears. If the question is about AWS-native findings aggregation, Security Hub is usually better. If it is about OCSF-normalized security data lake design, Security Lake is better.
+### Scenario 1: The Missing Download
 
----
+**Situation**
 
-## 16. Final Detection Checklist
+A company has an organization multi-Region trail delivering management events to S3. During an investigation, analysts find a successful bucket-policy change but cannot find a reported download from `exports/customers/`. They searched Event history and yesterday's archived management logs.
 
-Before moving to the next domain, you should be able to answer these without looking:
+**Decision**
 
-- What is the difference between CloudTrail management events and data events?
-- What does CloudTrail Insights detect?
-- When do you use CloudTrail Lake instead of Athena?
-- When do you use Security Lake instead of CloudTrail Lake?
-- What does OCSF mean at a practical level?
-- What does GuardDuty detect?
-- How do GuardDuty findings trigger automation?
-- What is Security Hub used for?
-- When should you choose Detective?
-- What is Macie for?
-- What is Inspector for?
-- What do VPC Flow Logs contain and not contain?
-- When do you need Route 53 Resolver query logs?
-- How do CloudWatch alarms notify people?
-- What does EventBridge do in a detection workflow?
-- How do you enable detection across all AWS accounts?
-- When would OpenSearch Security Analytics be the better answer?
+Which change provides the missing evidence for future downloads with targeted collection?
 
-If these are clear, you are ready to drill Detection questions in the portal.
+**Options**
+
+A. Increase Event history retention and enable CloudTrail Insights.
+
+B. Add S3 data-event collection for the relevant object prefix, including reads, while retaining management collection.
+
+C. Enable VPC Flow Logs and search for the object's key.
+
+D. Enable Macie and use its classification findings as download records.
+
+**Answer: B.**
+
+**Reasoning**
+
+- The missing category is object data activity.
+
+- The prefix and read selection address the stated scope.
+
+- A detects rate anomalies rather than individual object reads and does not provide the proposed Event history extension.
+
+- C lacks object keys.
+
+- D classifies content, not access history.
+
+- Previously uncaptured events are not recovered by enabling collection now.
+
+**Change one fact:** If the question were who changed the bucket policy, existing management events would be the right starting evidence.
+
+### Scenario 2: Encrypted Archive Delivery Stops
+
+**Situation**
+
+An archive bucket still accepts logs from one organization trail, but a newly configured trail reports KMS access errors. Both trails use the same bucket. The key is enabled and the bucket's log-write permissions include both trails.
+
+The key policy restricts CloudTrail use to the old trail ARN.
+
+**Decision**
+
+What is the narrowest relevant fix?
+
+**Options**
+
+A. Give every workload administrator decrypt access.
+
+B. Disable encryption on the bucket.
+
+C. Update the key policy's required CloudTrail permission and source restrictions to include the intended new trail.
+
+D. Enable additional S3 data events on the old trail.
+
+**Answer: C.**
+
+**Reasoning**
+
+- The error and policy condition identify the failed encryption boundary.
+
+- A changes reader access rather than producer encryption access.
+
+- B drops a requirement unnecessarily.
+
+- D changes collected evidence, not delivery authorization.
+
+- After the fix, verify new delivery and investigate any gap.
+
+### Scenario 3: Healthy Instance, Missing Logs
+
+**Situation**
+
+Private EC2 workers report CPU metrics, but the security team cannot see `/var/log/payments/auth.log`. The agent is running, its local diagnostic log reports endpoint connection timeouts, and the configured path exists and is readable.
+
+The instance has no outbound internet route and no CloudWatch Logs interface endpoint.
+
+**Decision**
+
+Which action best addresses the observed failure?
+
+**Options**
+
+A. Enable detailed EC2 monitoring.
+
+B. Open inbound TCP 443 from the internet.
+
+C. Replace the instance role with administrator access.
+
+D. Provide an allowed network path to CloudWatch Logs, such as the appropriate interface endpoint with working DNS and security-group settings.
+
+**Answer: D.**
+
+**Reasoning**
+
+- The failure is transport to the logging service.
+
+- Existing CPU metrics are not proof that this agent's log-ingestion path works.
+
+- Inbound internet access is unrelated; broader IAM does not fix a timeout.
+
+- The problem has already ruled out the file path as the immediate cause.
+
+### Scenario 4: Detection Without An Archive
+
+**Situation**
+
+GuardDuty raises an EC2 threat finding in an account with no customer-created VPC Flow Logs. A responder argues that the finding must be invalid and that enabling GuardDuty should have stored all raw flows for later SQL searches.
+
+**Decision**
+
+Which explanation is correct?
+
+**Options**
+
+A. GuardDuty uses independent foundational telemetry; configure separate flow logging for the required retained evidence.
+
+B. GuardDuty can operate only after a customer creates Flow Logs.
+
+C. Every GuardDuty finding contains every underlying packet.
+
+D. Security Hub automatically restores missing raw flow history.
+
+**Answer: A.**
+
+**Reasoning**
+
+- Detection and the customer's evidence archive are separate paths.
+
+- B incorrectly introduces a prerequisite.
+
+- C confuses a finding with packet capture.
+
+- D confuses findings aggregation with raw-event reconstruction.
+
+### Scenario 5: Fractional Severity And Missing Notifications
+
+**Situation**
+
+A GuardDuty finding has severity 7.5 and is visible in the source account. An EventBridge rule uses `"severity": [7, 8, 9]`; there are no matched events for this finding. The security requirement is notification for all severities of at least 7.
+
+**Decision**
+
+What should change first?
+
+**Options**
+
+A. Add SNS administrator permissions to the analyst.
+
+B. Replace the exact values with a numeric comparison of `>= 7`.
+
+C. Disable GuardDuty suppression across the organization.
+
+D. Add a CloudWatch agent to every EC2 instance.
+
+**Answer: B.**
+
+**Reasoning**
+
+- The observed failure is pattern matching.
+
+- The rule's exact values exclude 7.5.
+
+- A addresses a later boundary without evidence.
+
+- C makes an unrelated broad change.
+
+- D has no bearing on finding routing.
+
+- After changing the pattern, verify target delivery separately.
+
+### Scenario 6: A Dashboard With Blind Spots
+
+**Situation**
+
+A security team aggregates CSPM findings from several Regions. A new account runs workloads in another enabled Region but contributes no control findings. The team has not verified Config recording or central configuration policy association for that account.
+
+**Decision**
+
+What is the best next step?
+
+**Options**
+
+A. Mark the account compliant because it has no findings.
+
+B. Add an Athena table over the existing findings.
+
+C. Verify account/Region enrollment, configuration policy, enabled controls, and Config recording prerequisites.
+
+D. Resolve old findings in the central dashboard.
+
+**Answer: C.**
+
+**Reasoning**
+
+- Absence of results may be lack of assessment.
+
+- Aggregation does not prove source-side enablement.
+
+- A interprets missing evidence as success.
+
+- B changes querying, not coverage.
+
+- D changes workflow records, not assessment inputs.
+
+### Scenario 7: Network Acceptance Is Not Application Success
+
+**Situation**
+
+A private worker cannot download an export through an S3 VPC endpoint. The available network telemetry does not show a transport block. A captured CloudTrail network activity event reports `VpceAccessDenied`.
+
+**Decision**
+
+Which control should be investigated first?
+
+**Options**
+
+A. The VPC endpoint policy and the request's action/resource/principal.
+
+B. The application's S3 identity policy, without inspecting endpoint policy evaluation.
+
+C. A missing inbound return-traffic rule on the instance's stateful security group.
+
+D. Resolver query-log delivery to the archive bucket.
+
+**Answer: A.**
+
+**Reasoning**
+
+- The event identifies authorization at the endpoint policy.
+
+- Connectivity is not API permission.
+
+- B checks a different permission layer and cannot override endpoint denial.
+
+- C confuses stateful return handling and API authorization.
+
+- D concerns DNS evidence delivery, not the reported denial.
+
+### Scenario 8: Keep Evidence And Detect Changes
+
+**Situation**
+
+A regulated team must retain audit objects for a defined period with no early deletion, and separately detect whether delivered CloudTrail files were altered.
+
+**Decision**
+
+Which pair best addresses these requirements? Choose TWO.
+
+**Options**
+
+A. CloudTrail log file validation with retained digests and an actual validation procedure.
+
+B. An EventBridge rule matching every EC2 state change.
+
+C. S3 Object Lock compliance-mode retention configured for the required object versions.
+
+D. A CloudWatch dashboard restricted to administrators.
+
+**Answer: A and C.**
+
+**Reasoning**
+
+- C provides retention protection; A provides tamper evidence for delivered logs.
+
+- They solve different problems.
+
+- B does not protect archive objects; D is a display/access choice, not retention or validation.
+
+- Also retain usable decryption capability.
+
+### Scenario 9: A Silent Error Alarm
+
+**Situation**
+
+A security metric emits only when an error occurs. After a quiet weekend, its alarm shows `INSUFFICIENT_DATA`. Engineers propose treating all missing data as breaching for both this metric and a separate one-minute collector heartbeat.
+
+**Decision**
+
+Which reasoning is best?
+
+**Options**
+
+A. Missing data always means an attack.
+
+B. Missing data always means everything is healthy.
+
+C. Both metrics must have identical settings because they share a namespace.
+
+D. Choose settings by metric semantics; a quiet error metric and a missing heartbeat mean different things, and collector health should be monitored independently.
+
+**Answer: D.**
+
+**Reasoning**
+
+- A/B erase the distinction between sparse event metrics and expected continuous signals.
+
+- C confuses naming with behavior.
+
+- Suppressing missing-data alarms for errors should not conceal a dead collector.
+
+### Scenario 10: The Target Accepted The Event
+
+**Situation**
+
+EventBridge successfully invokes a Lambda target for a finding. The function then throws an exception while creating a ticket. The team's EventBridge delivery DLQ remains empty.
+
+**Decision**
+
+Which conclusion is most accurate?
+
+**Options**
+
+A. EventBridge lost the finding before matching it.
+
+B. The invocation was accepted; inspect Lambda execution and asynchronous failure handling, and make retries idempotent.
+
+C. The severity threshold must be wrong.
+
+D. Retrying must always create another ticket.
+
+**Answer: B.**
+
+**Reasoning**
+
+- The successful handoff narrows the failure to processing after delivery.
+
+- The delivery DLQ does not necessarily collect handler failures.
+
+- A/C contradict the successful invocation.
+
+- D risks duplicates if a request partially succeeded before an error.
+
+### Scenario 11: Choose The Analysis Architecture
+
+**Situation**
+
+A new AWS customer retains CloudTrail files in S3. It needs occasional SQL investigation with minimal additional ingestion infrastructure. A proposal says to enroll in CloudTrail Lake solely because the requirement mentions SQL.
+
+**Decision**
+
+What is the strongest correction under current service availability?
+
+**Options**
+
+A. Use Detective to execute arbitrary SQL over the bucket.
+
+B. Use Macie to replace audit queries.
+
+C. Evaluate Athena over the existing archive with the correct schema, partitions, and S3/KMS/result permissions; Lake is closed to new customers.
+
+D. Copy every file into application memory for manual review.
+
+**Answer: C.**
+
+**Reasoning**
+
+- It matches existing storage and current availability.
+
+- A/B solve different problems; D adds unnecessary operational work.
+
+- For an existing Lake customer with an existing store, the decision can differ.
+
+### Scenario 12: Order A Logging Investigation
+
+**Situation**
+
+A new API stage reports errors, but the backend Lambda has no application records for the failing requests. Arrange the investigation without assuming all failures reach Lambda:
+
+1. Establish the request time, stage, request ID, and observed response.
+2. Check API access/execution evidence and whether authorization rejected the request before integration.
+3. If integration was attempted, correlate with Lambda invocation/execution evidence and verify its log destination/permissions.
+4. Correct the identified failure and repeat a controlled request through the full path.
+
+**Answer: 1 -> 2 -> 3 -> 4.**
+
+**Reasoning**
+
+- Follow the request.
+
+- Granting Lambda more logging permission cannot reveal an invocation that never happened.
+
+- If the API itself lacks logs, fix that collection gap before claiming it saw no traffic.
+
+### Scenario 13: A Clean Sensitive-Data Report
+
+**Situation**
+
+A team enables Macie and runs a discovery job against a support bucket. The report contains no sensitive-data findings. Later, an engineer notices that the job sampled objects and several encrypted files were skipped because Macie could not read them.
+
+Management asks whether the entire bucket can now be classified as non-sensitive.
+
+**Decision**
+
+What is the best answer?
+
+**Options**
+
+A. Yes, because bucket inventory guarantees every object's contents were scanned.
+
+B. Yes, if the bucket is private; private objects cannot contain sensitive information.
+
+C. No; correct the coverage and read/decrypt prerequisites, select the required scope, and interpret completed discovery results before making that claim.
+
+D. No; enable Inspector on the bucket to scan the missing object contents.
+
+**Answer: C.**
+
+**Reasoning**
+
+- The conclusion is limited by what was actually examined.
+
+- Inventory, access posture, and content classification are different.
+
+- D substitutes a workload vulnerability service for S3 content discovery.
+
+- A clean sample is useful evidence about the sample, not proof about every object.
+
+### Scenario 14: A Lake Subscriber Sees Only One Region
+
+**Situation**
+
+A SIEM has Security Lake data access for selected sources in Region A. The organization collects the same sources in Region B, but has not configured a rollup or a subscriber there. Analysts see no Region B data through the SIEM.
+
+They want both Regions while keeping source access restricted.
+
+**Decision**
+
+Which change addresses the design?
+
+**Options**
+
+A. Add a wider EventBridge pattern to the existing GuardDuty notification rule.
+
+B. Configure the intended regional subscriber/rollup design and grant only the required source access, then verify notifications and reads.
+
+C. Grant the SIEM organization management-account administrator access.
+
+D. Change the Athena SQL projection without changing subscriber scope.
+
+**Answer: B.**
+
+**Reasoning**
+
+- Subscriber scope and regional collection must line up.
+
+- A changes a different delivery system.
+
+- C is overbroad and does not replace subscriber configuration.
+
+- D cannot expose data outside the configured access path.
+
+- Query access and data access are also different subscription modes.
+
+### Scenario 15: Suppression Hides A Downstream Alert
+
+**Situation**
+
+A central team has an EventBridge-to-SNS path that previously worked for GuardDuty findings. After adding a suppression rule for a broad EC2 finding category, a new matching finding appears only in GuardDuty's archived view. SNS has no new message.
+
+**Decision**
+
+What should the team investigate first?
+
+**Options**
+
+A. The suppression scope: these findings are archived and not sent through normal downstream forwarding; narrow the exception to approved activity.
+
+B. The SNS email subscription, even though the source finding was suppressed.
+
+C. The raw CloudTrail archive's lifecycle transition to colder storage.
+
+D. Missing EC2 CloudWatch agent permissions as a prerequisite for GuardDuty finding export.
+
+**Answer: A.**
+
+**Reasoning**
+
+- The evidence identifies an intentional source-side forwarding change.
+
+- B could matter for a delivered event, but first restore the desired source behavior.
+
+- C does not explain this finding-routing change.
+
+- D introduces an unrelated prerequisite.
+
+- Confirm the approved exception and test a non-suppressed sample after the repair.
+
+### Scenario 16: Healthy Infrastructure, Broken Customer Journey
+
+**Situation**
+
+EC2 status checks and CPU alarms are healthy, but customers receive an authorization error from a public API stage after a deployment. The on-call team wants an alert for failure of the actual customer path.
+
+**Decision**
+
+Which addition best addresses that requirement?
+
+**Options**
+
+A. A lower CPU threshold on the same instances.
+
+B. A dashboard displaying every EC2 status check across accounts.
+
+C. More frequent CloudTrail management-event searches for EC2 changes.
+
+D. An application-level synthetic request with suitable test credentials, expected response checks, and an alarm, plus API logs for diagnosis.
+
+**Answer: D.**
+
+**Reasoning**
+
+- The requirement is successful application behavior.
+
+- Resource health can remain normal during an authorization/configuration failure.
+
+- A/B still measure the wrong condition.
+
+- C may help investigate infrastructure changes but does not test the customer's operation.
+
+- Protect the synthetic credentials and avoid modifying real customer data during the check.
+
+## 13. Readiness And Objective Coverage
+
+This map uses AWS skill identifiers so a named service does not count as coverage without an explanation and an application. The descriptions are condensed learning goals, not a copy of the exam guide. [Official Domain 1 objectives](https://docs.aws.amazon.com/aws-certification/latest/security-specialty-03/security-specialty-03-domain1.html).
+
+| Skill | Demonstrate this ability | Study location |
+| --- | --- | --- |
+| 1.1.1 | Turn a workload threat into evidence requirements | Sections 1 and 11 |
+| 1.1.2 | Distinguish application health from infrastructure metrics | Sections 4 and 10 |
+| 1.1.3 | Centralize findings without assuming source coverage | Sections 6 and 7 |
+| 1.1.4 | Build and interpret detections, metrics, alarms and views | Sections 4, 6, 7 and 9 |
+| 1.1.5 | Explain scheduled assessment and desired-state mechanisms | Section 7 |
+| 1.2.1 | Select evidence by question and storage needs | Sections 1, 3 and 8 |
+| 1.2.2 | Explain service/application logging setup | Sections 2, 3, 4 and 10 |
+| 1.2.3 | Design archives and lake/subscriber integrations | Sections 3 and 8 |
+| 1.2.4 | Choose and troubleshoot a query mechanism | Sections 4, 8 and 10 |
+| 1.2.5 | Parse, normalize, correlate and visualize appropriately | Section 8 |
+| 1.2.6 | Follow network paths to the correct log sources | Section 5 |
+| 1.3.1 | Inspect configuration and permission boundaries | Sections 3, 9 and 10 |
+| 1.3.2 | Diagnose missing evidence and verify the repair | Sections 4, 10 and 12 |
+
+Before moving on, explain these aloud without using only service names:
+
+- Why does GuardDuty work without your own Flow Logs, yet not replace your archive?
+- Why can an accepted network flow coexist with an API authorization denial?
+- How do you tell missing data from a healthy quiet period?
+- Which permission allows log delivery, and which allows analysts to decrypt logs?
+- What changes when a source account or Region is added?
+- How do you prove a finding reached the responder and that a downstream action succeeded?
+- Why does neither encryption nor log validation alone satisfy immutable retention?
+- When does a relationship graph help more than SQL, and when does it not?
+
+An answer is ready when it explains the mechanism, the relevant constraint, and how to verify the result. Revisit any scenario you answered from a keyword alone. Then continue to [02. Incident Response](02-incident-response-study-guide.md), which covers what to do after detection.
