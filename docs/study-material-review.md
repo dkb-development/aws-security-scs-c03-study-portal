@@ -18,7 +18,7 @@ The initial review inspected the structure, foundation links, representative tea
 | 01 Detection | Rewritten and checked against all 13 Domain 1 skills | Reader review and refinements |
 | 02 Incident Response | Detailed expansion complete | Guided lessons, six scenario workshops, nine-skill map, evidence/response foundations; reader refinements remain welcome |
 | 03 Infrastructure Security | Detailed expansion complete | Packet-path lessons, six workshops, objective map, private/edge/device foundations and service-lifecycle corrections |
-| 04 IAM | Preliminary review only | Explain policy evaluation with concrete requests, same/cross-account differences, trust/session boundaries and condition-key support |
+| 04 IAM | Detailed expansion complete | Request-path teaching, six workshops, eight-skill map, federation foundations, corrected S3 ABAC and resource-policy exceptions |
 | 05 Data Protection | Preliminary review only | Teach encryption/key lifecycle, cross-account KMS/S3 decisions, rotation and restore/decryption failures |
 | 06 Governance | Preliminary review only | Explain policy inheritance/scope, enrollment, control implementation, drift/remediation and audit-evidence limits |
 
@@ -31,7 +31,7 @@ The initial review inspected the structure, foundation links, representative tea
 - Current AWS documentation contradicts blanket CloudTrail Lake recommendations: new customers cannot enroll after May 31, 2026. The revised Detection/foundations content states the constraint.
 - Security Hub CSPM and current Security Hub need distinct treatment, including ASFF versus OCSF and behavior-investigation versus exposure-graph capabilities.
 - The old EventBridge exact severity list `[7, 8, 9]` was not a general threshold. The new example uses a numeric comparison and explains fractional values.
-- Topic 4's S3 ABAC example uses `aws:ResourceTag/Project` with `s3:GetObject`. Verify action-specific condition-key support and rewrite with an appropriate object-tag example during Topic 4 review. It has not been silently treated as correct.
+- Topic 4's S3 ABAC examples now use `s3:ExistingObjectTag/Project` for `s3:GetObject`. The added teaching explains supported actions, attribute ownership, and negative tests. Policy evaluation now distinguishes direct resource-policy grants from ordinary identity-derived permissions.
 - Older question-bank material includes abbreviated/aging assertions about service defaults, new-customer availability, suppression and other behavior. Those banks remain reference inputs, not the factual authority for the new chapter. Reconcile them in a separate bank pass before republishing the full portal.
 
 ## Detection Coverage Preservation

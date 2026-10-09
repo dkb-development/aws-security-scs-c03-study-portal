@@ -16,6 +16,317 @@ Use it as a reverse-engineered study path: learn the IAM patterns that appear re
 
 ---
 
+## Guided Learning Path
+
+Reviewed: 2026-10-09. Read these connected lessons first; the component reference and revision questions below remain available for lookup. Priorities reflect study needs, not a prediction of live exam questions.
+
+| Reading pass | What you will be able to explain |
+| --- | --- |
+| [A: Identity to request](#a-follow-one-request-from-sign-in-to-s3) | Authentication, credentials, authorization, and audit identity |
+| [B: Policy reasoning](#b-reason-about-permissions-without-a-false-universal-formula) | Grants, restrictions, resource-policy exceptions, and cross-account access |
+| [C: Temporary trust](#c-build-trust-without-creating-an-escalation-path) | Role assumption, third parties, service access, and delegation |
+| [D: Federation and applications](#d-choose-the-right-identity-system) | Workforce sign-in, customer tokens, and application authorization |
+| [E: Attributes and diagnosis](#e-use-attributes-and-evidence-to-control-access) | Tag authority, least privilege, and AccessDenied investigations |
+| [F: Scenario workshop](#f-iam-scenario-workshop) | Apply the rules to competing requirements |
+
+## A. Follow One Request From Sign-In To S3
+
+### Three Questions, Not One
+
+A developer signing in successfully has proved an identity. That does not establish permission to read every object. [IAM](00-aws-security-foundations-for-beginners.md#iam) evaluates individual operations, not whether the person deserves a general label such as "trusted employee."
+
+```text
+Company login              Prove who the person is
+      |
+Account + role selection   Obtain temporary credentials
+      |
+Signed GetObject request   Identify this request's principal
+      |
+Policy evaluation         Decide whether this action is allowed
+      |
+S3 / KMS operations       Other relevant permissions may apply
+```
+
+**Credentials** are the evidence used to authenticate a request. Temporary AWS credentials contain an access key ID, a secret access key, and a session token. SDKs normally obtain and refresh them through their credential providers; applications should not embed a developer's permanent key.
+
+**Authorization** checks the action, resource, caller, and conditions. A role can list a bucket but fail to read an object because `s3:ListBucket` uses the bucket ARN while `s3:GetObject` uses an object ARN. SSE-KMS adds a separate key-use requirement; S3 permission is not a substitute for KMS permission.
+
+**Audit identity** helps you trace what happened. A role is the reusable definition; a role session is one temporary use of it. See [roles, sessions, and requests](00-aws-security-foundations-for-beginners.md#roles-sessions-and-policy-requests) before interpreting these two names:
+
+```text
+Role:    arn:aws:iam::111122223333:role/ReportReader
+Session: arn:aws:sts::111122223333:assumed-role/ReportReader/job42
+```
+
+A useful investigation captures the actual principal, API operation, object/key ARN, account, Region, timestamp, and request ID. Looking only at the policy attached to the human who started the workflow can miss the role that actually called S3.
+
+### Verification Before Changing Permissions
+
+Use `sts:GetCallerIdentity` to check the credentials the tool is using. Check the service error and the relevant CloudTrail events where recorded. Object-level S3 operations require appropriate data-event logging; absence from management-event history is not proof no request happened.
+
+Then reproduce the smallest failing operation. A console page may call several APIs, so "the console is broken" is a less useful symptom than "GetObject fails for this object using this session."
+
+## B. Reason About Permissions Without A False Universal Formula
+
+### Separate Grants From Restrictions
+
+An identity policy can give a role permission. A resource policy can give a specified principal permission to a resource. A [permissions boundary](00-aws-security-foundations-for-beginners.md#permissions-boundary) limits grants made through identity policies; it does not itself give access.
+
+A session policy narrows a temporary session's identity-derived permissions. An SCP limits covered member-account principals. An RCP limits access to covered resources. A trust policy answers who may assume a role, not what the resulting role may do to S3.
+
+```text
+First identify the request and its grant path
+        |
+        +-- Identity-policy permission?
+        +-- Resource-policy permission?
+        +-- Cross-account relationship?
+        |
+Then apply the restrictions relevant to that path
+        |
+Any applicable explicit deny -> request denied
+```
+
+This is a reasoning model, not an implementation-order diagram. Service-specific rules still matter. KMS key-policy authorization, for example, must be understood explicitly rather than treating it as an ordinary S3 bucket policy.
+
+### The Common Identity-Policy Case
+
+Suppose a deployment role's identity policy allows `s3:GetObject` and `ec2:TerminateInstances`. Its boundary permits only S3 operations. Through that identity-policy path, the S3 read can succeed and termination cannot. Adding another identity-policy allow for termination changes nothing until the limiting boundary permits it.
+
+If an SCP explicitly denies the S3 read for that principal, neither a broader identity policy nor the account's administrator policy overrides the deny. First determine whether the organizational policy actually applies to the principal/resource in the question.
+
+### The Resource-Policy Exception You Must Recognize
+
+Within the same account, **what the resource policy names** can change which implicit restrictions apply:
+
+| Direct recipient of a resource-policy grant | Important implicit-deny behavior |
+| --- | --- |
+| IAM user ARN | Missing identity/boundary allows do not limit this grant |
+| IAM role ARN | Boundary and session-policy limits still matter |
+| Assumed-role session ARN | Missing identity, boundary, or session allows do not limit this direct session grant |
+
+An explicit deny still wins. Applicable organization controls and service rules do not disappear. This is not a recommendation to bypass boundaries with session grants; it explains why a boundary is not a universal substitute for careful resource policies. [AWS boundary evaluation details](https://docs.aws.amazon.com/IAM/latest/UserGuide/access_policies_boundaries.html).
+
+Avoid a resource-policy `Deny` with `NotPrincipal` when principals have boundaries: it can reject them unexpectedly. AWS documents using an appropriate `aws:PrincipalArn` condition instead. Review the exact condition semantics, not just the policy's apparent English meaning.
+
+### Two Different Cross-Account Designs
+
+```text
+Design 1: assume a role in account B
+Caller in A -> STS permission + B role trust
+           -> temporary B role -> B resource permissions
+
+Design 2: access B resource directly as an A principal
+A identity authorization + B resource authorization
+           -> resource request remains from A principal
+```
+
+In Design 1, assumption success does not imply the resulting role can read the bucket. In Design 2, adding only a bucket-side allow is insufficient for the usual cross-account identity/resource authorization model. Apply relevant restrictions on both sides and additional KMS permissions for encrypted content. [AWS policy evaluation](https://docs.aws.amazon.com/IAM/latest/UserGuide/reference_policies_evaluation-logic.html).
+
+## C. Build Trust Without Creating An Escalation Path
+
+### Vendor Access And The Confused Deputy
+
+A monitoring vendor serves many customers from its AWS account. Without customer-specific trust conditions, one customer might persuade the vendor to use another customer's role. An [external ID](00-aws-security-foundations-for-beginners.md#external-id) distinguishes the intended customer relationship.
+
+The customer trusts the appropriate vendor principal and requires the unique external ID assigned for that customer. It is not a password or MFA factor. The vendor must not let a customer choose another customer's identifier. Inspect the caller permission, trust policy, and external-ID value when assumption fails.
+
+Service-to-service access is a different case. A resource policy for an AWS service may use supported `aws:SourceArn` and `aws:SourceAccount` conditions to restrict which source resource can trigger access. Do not substitute an external ID for every service confused-deputy control. [AWS confused-deputy guidance](https://docs.aws.amazon.com/IAM/latest/UserGuide/confused-deputy.html).
+
+### Passing A Role Is Powerful
+
+`iam:PassRole` lets a caller assign an IAM role to an AWS service in supported workflows. It is not the same as calling `sts:AssumeRole` personally. A developer allowed to launch Lambda with a highly privileged execution role may gain those capabilities through function code.
+
+```text
+Developer can create function + pass AdminRole
+       |
+Function executes as AdminRole
+       |
+Developer-controlled code uses AdminRole permissions
+```
+
+Scope PassRole to approved roles and, where supported, `iam:PassedToService`. Restrict edits to approved roles, boundaries, and deployment paths. Requiring a boundary at creation is incomplete if the developer can later remove it, replace it, or pass an unbounded role. [PassRole documentation](https://docs.aws.amazon.com/IAM/latest/UserGuide/id_roles_use_passrole.html).
+
+IAM paths such as `/application/` organize names. They become useful permission scopes only when policies deliberately reference the relevant ARNs; the path alone does not create isolation.
+
+### Presigned URLs Are Delegated Requests
+
+A [presigned URL](00-aws-security-foundations-for-beginners.md#s3-presigned-urls) lets another person perform the signed operation using the signer's authorization. Treat possession of it as sensitive: it is not automatically single-use, and it is not a separate public bucket permission.
+
+Its useful lifetime is limited by both its configured expiration and the credentials that signed it. A URL signed with a temporary role session can stop working when that session expires, even when the requested URL duration was longer. Policies and object availability can also deny the request. [S3 presigned URL behavior](https://docs.aws.amazon.com/AmazonS3/latest/userguide/using-presigned-url.html).
+
+## D. Choose The Right Identity System
+
+### Employees Entering AWS Accounts
+
+[IAM Identity Center](00-aws-security-foundations-for-beginners.md#iam-identity-center) combines a workforce identity source with account assignments and permission sets. A permission set describes AWS permissions; provisioning makes the associated roles available in assigned accounts.
+
+```text
+Identity provider -> user/group in Identity Center
+                  -> account + permission-set assignment
+                  -> provisioned role -> temporary session
+```
+
+Troubleshoot each stage separately. A successful company login with no account tile suggests assignment or group synchronization issues. An account tile followed by AccessDenied suggests the provisioned permissions, current session, or other policy layers. Changing group membership does not magically rewrite every already issued credential.
+
+Directory Service answers a different integration need. AD Connector forwards directory requests to existing Active Directory; AWS Managed Microsoft AD provides a managed directory. Neither is simply another name for an Identity Center permission set. [Identity Center permission sets](https://docs.aws.amazon.com/singlesignon/latest/userguide/permissionsetsconcept.html).
+
+### Customers Entering Your Application
+
+A Cognito user pool authenticates application users and issues tokens. A token is a signed set of claims, such as who the user is and when authentication expires. It is not an AWS secret access key.
+
+A Cognito identity pool can exchange supported identity-provider evidence for temporary AWS credentials. An application can instead keep AWS access on its backend and never give customers AWS credentials at all.
+
+```text
+Customer -> user pool -> token -> API backend
+                                  |
+                                  +-- validate token
+                                  +-- authorize tenant/action
+                                  +-- access AWS as backend role
+
+Alternative: identity pool -> scoped temporary AWS credentials
+```
+
+Validate token signature, issuer, expiration, expected client/audience as appropriate to token type, and intended use. Decoding a JWT without validating it is not authentication. Do not trust a client-supplied tenant ID merely because the client has a valid token. [Cognito token verification](https://docs.aws.amazon.com/cognito/latest/developerguide/amazon-cognito-user-pools-using-tokens-verifying-a-jwt.html).
+
+[Verified Permissions](00-aws-security-foundations-for-beginners.md#amazon-verified-permissions) evaluates application authorization policies, such as whether an employee may approve a particular expense. Your application must supply trustworthy identity/resource context and enforce the answer. It does not replace the Lambda execution role's AWS API permissions.
+
+### Workloads Outside AWS
+
+[IAM Roles Anywhere](00-aws-security-foundations-for-beginners.md#iam-roles-anywhere) lets an external workload use an X.509 certificate to obtain temporary role credentials. A trust anchor identifies a trusted certificate authority; a profile limits available roles/session settings; the role trust and permissions still apply.
+
+Keep the certificate's private key protected. Short-lived AWS credentials do not solve theft of the long-lived credential used to renew them. Design certificate revocation and trust changes as well as session expiration. [Roles Anywhere trust model](https://docs.aws.amazon.com/rolesanywhere/latest/userguide/trust-model.html).
+
+## E. Use Attributes And Evidence To Control Access
+
+### ABAC Needs Trustworthy Tags
+
+Role-based access control assigns permissions by role, such as Auditor. [ABAC](00-aws-security-foundations-for-beginners.md#abac) uses attributes, such as Project=Billing. It scales when new resources can follow a tagging convention instead of requiring a new policy for every resource.
+
+Here is an **illustrative statement**, not a complete authorization design, for reading existing tagged S3 objects:
+
+```json
+{
+  "Effect": "Allow",
+  "Action": "s3:GetObject",
+  "Resource": "arn:aws:s3:::example-project-records/*",
+  "Condition": {
+    "StringEquals": {
+      "s3:ExistingObjectTag/Project": "${aws:PrincipalTag/Project}"
+    }
+  }
+}
+```
+
+Read it as: this GetObject allow applies when the stored object's Project tag matches the authenticated principal's Project tag. It does not grant ListBucket, upload, or deletion. S3 action-specific tag keys are not interchangeable with a generic resource-tag key. [S3 object-tag conditions](https://docs.aws.amazon.com/AmazonS3/latest/userguide/tagging-and-policies.html).
+
+**The attack to prevent:** a Billing user changes their session tag to Payroll or retags the target object. Control who sets identity-provider attributes, `sts:TagSession`, allowed tag keys/values, and object-tag modifications. Missing or mismatched tags need negative tests, not just a successful Billing-to-Billing test.
+
+### A Repeatable AccessDenied Investigation
+
+1. Capture the exact caller/session and failing API/resource.
+2. Determine whether role assumption failed or a later resource request failed.
+3. Identify identity/resource grants and the account relationship.
+4. Check applicable explicit denies, boundaries, session limits, organization controls, and endpoint policies.
+5. Check action-specific conditions, resource ARN forms, encryption permissions, and service state.
+6. Test the narrow fix and an intentional denial; inspect resulting evidence.
+
+IAM policy simulation helps evaluate candidate policies but is not a universal reproduction of every live service request or cross-account context. Missing context values and unsupported cases can change the result. Do not respond to a simulator allow by automatically deleting production guardrails. [Simulator limitations](https://docs.aws.amazon.com/IAM/latest/UserGuide/access_policies_testing-policies.html).
+
+Access Analyzer has distinct jobs: analyze external access, identify unused access where configured, validate policies, and generate a policy based on supported recorded activity. A generated policy reflects observed use, not every legitimate monthly or disaster-recovery action. Test the reduced policy against the application's full lifecycle before deployment. [Access Analyzer capabilities](https://docs.aws.amazon.com/IAM/latest/UserGuide/what-is-access-analyzer.html).
+
+## F. IAM Scenario Workshop
+
+### Workshop 1: A Role Assumes Successfully But Cannot Read
+
+**Situation:** An auditor in account A assumes AuditRead in B. The STS call succeeds. GetObject in B fails. The bucket uses SSE-KMS, and the role already has an effective S3 read permission with no S3 deny.
+
+**Decision:** Which investigation is most useful next?
+
+- A. Add the auditor's user ARN to the role trust policy again.
+- B. Inspect key policy, role KMS permissions, and key state for the object's key.
+- C. Give the auditor an IAM access key instead of STS credentials.
+
+**Answer: B.** Successful assumption already demonstrates that the trust path worked for this session. S3 authorization does not guarantee decryption authorization. A repeats a completed step; C changes credential type without fixing key access. Verify the actual encryption key, not just the bucket's current default.
+
+### Workshop 2: Delegation Escapes A Boundary
+
+**Situation:** Developers create roles only when a designated boundary is present. They can also remove that boundary and pass any role to Lambda. Management believes the creation condition prevents privilege escalation.
+
+**Decision:** Choose two controls to add.
+
+- A. Prevent unauthorized boundary removal/replacement and edits to the boundary policy.
+- B. Restrict PassRole to approved roles and intended services.
+- C. Rename all roles under `/safe/` without changing permissions.
+
+**Answer: A and B.** A protects the limit after creation. B closes the route through privileged service execution. C is naming only; policy enforcement must actually refer to the allowed resources. Test creation, later modification, and role assignment as separate operations.
+
+### Workshop 3: Temporary Link Fails Early
+
+**Situation:** A backend assumes a one-hour role session and signs an S3 download URL requesting a longer duration. The recipient downloads successfully immediately but receives an error later. No object or bucket policy changed.
+
+**Decision:** What should be checked first?
+
+- A. The expiration of the credentials that signed the URL.
+- B. Whether the recipient created an IAM user.
+- C. Whether the bucket should be made public.
+
+**Answer: A.** The URL cannot extend the underlying credential lifetime. B is unnecessary for the delegated request; C discards the private-access requirement. Renew links through the authorized backend rather than distributing permanent signing keys.
+
+### Workshop 4: Valid Token, Wrong Customer's Data
+
+**Situation:** A SaaS API validates Cognito token signatures but reads the tenant ID from a request parameter. A customer changes that parameter and reads another tenant's invoice. The backend role legitimately reads the shared table.
+
+**Decision:** Which change addresses the defect?
+
+- A. Add tenant/resource authorization using trusted identity context on every protected operation.
+- B. Increase the backend role's session duration.
+- C. Move from user-pool tokens to an unrestricted identity-pool role.
+
+**Answer: A.** Authentication succeeded; application authorization failed. Verified Permissions can centralize the decision if the application supplies trusted context and enforces the result. B is unrelated. C moves broad credentials to the client and does not establish tenant isolation.
+
+### Workshop 5: Matching Tags Do Not Prove Isolation
+
+**Situation:** A company authorizes object reads by Project tag. A developer may freely set session tags and modify object tags. All positive tests pass: Billing-tagged users can read Billing objects.
+
+**Decision:** What missing test exposes the main risk?
+
+- A. Attempt to set another project's identity tag or change a target object's tag, then read it.
+- B. Increase object size and repeat the same authorized read.
+- C. Add another Allow for the same matching tags.
+
+**Answer: A.** Authorization depends on attributes; control of those attributes can become control of permission. B tests data size, not isolation. C cannot repair an untrusted attribute source. Also test missing tags and unsupported action/condition combinations.
+
+### Workshop 6: Diagnose In The Right Order
+
+**Situation:** A deployment started failing after a pipeline identity change. The team proposes attaching AdministratorAccess everywhere. CloudTrail shows the failure at AssumeRole rather than during deployment.
+
+**Decision:** Put the investigation in a useful order.
+
+```text
+Identify actual caller -> inspect caller STS permission
+ -> inspect target trust and conditions -> test assumption
+ -> inspect resulting role permissions for deployment
+```
+
+**Reasoning:** The new identity must first qualify to assume the role. Changing the role's downstream S3/CloudFormation permissions cannot repair failed assumption. After assumption works, separately test deployment operations and guardrails. Do not confuse fixing authentication/trust with authorizing every later action.
+
+## G. IAM Readiness And Objective Map
+
+| Official skill | Teaching and demonstration |
+| --- | --- |
+| 4.1.1 Authentication methods | A/D; distinguish workforce, customers, workloads and MFA/IdP controls in the reference |
+| 4.1.2 Temporary credentials | A/C/D; workshop 3 and STS/session reference |
+| 4.1.3 Authentication troubleshooting | A/D/F6; identify failure before or after session issuance |
+| 4.2.1 Authorization controls | B/C/D; cross-account, trust, paths, Roles Anywhere and app policy |
+| 4.2.2 ABAC and RBAC | E/F5; test attribute ownership, not just equality |
+| 4.2.3 Least privilege and limits | B/C/E/F2; distinguish grants and constraints |
+| 4.2.4 Authorization troubleshooting | E/F1/F6; live evidence and simulation limits |
+| 4.2.5 Unintended permissions | B/C/E/F4; correct resource grants, escalation and tenant access |
+
+Use the [official Domain 4 objectives](https://docs.aws.amazon.com/aws-certification/latest/security-specialty-03/security-specialty-03-domain4.html) as the coverage baseline. You are ready when you can identify the actual principal, draw its trust and permission paths, explain a denied request, and test both intended and unintended access without granting administrator permissions as a shortcut.
+
+---
+
 ## 0. AWS Component Primer: What Each Service Does First
 
 This section explains the AWS components in simple words before going into exam decision rules.
@@ -137,7 +448,7 @@ Deny.
 If the question says:
 
 ```text
-SCP allows, but no IAM identity policy allows
+SCP allows, but no applicable identity or resource policy grants access
 ```
 
 Answer:
@@ -718,7 +1029,7 @@ Example policy idea:
   "Resource": "*",
   "Condition": {
     "StringEquals": {
-      "aws:ResourceTag/Project": "${aws:PrincipalTag/Project}"
+      "s3:ExistingObjectTag/Project": "${aws:PrincipalTag/Project}"
     }
   }
 }
@@ -1065,15 +1376,14 @@ This is the most important IAM exam scenario.
 ### Good Mental Model
 
 ```text
-Allowed only if:
-  identity/resource/trust policy allows as needed
-  AND permission boundary allows if present
-  AND session policy allows if present
-  AND SCP allows if present
-  AND RCP allows if present
-  AND KMS/endpoint/resource policy allows if relevant
-  AND no explicit deny applies
+Identify principal + action + resource + account relationship
+  -> find the applicable permission-grant path
+  -> apply restrictions relevant to that path
+  -> any applicable explicit deny wins
+  -> evaluate service-specific requirements
 ```
+
+For ordinary identity-derived permissions, boundaries and session policies intersect with identity permissions. Do not apply that formula universally to direct resource-policy grants: [Section B](#b-reason-about-permissions-without-a-false-universal-formula) explains same-account user, role, and role-session distinctions. Role trust matters at assumption time, not as a new grant for every subsequent S3 call.
 
 ### Simple Table
 
@@ -1363,7 +1673,7 @@ IAM condition compares principal tag to resource tag
   "Resource": "arn:aws:s3:::company-data/*",
   "Condition": {
     "StringEquals": {
-      "aws:ResourceTag/Project": "${aws:PrincipalTag/Project}"
+      "s3:ExistingObjectTag/Project": "${aws:PrincipalTag/Project}"
     }
   }
 }

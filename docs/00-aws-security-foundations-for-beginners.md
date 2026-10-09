@@ -679,6 +679,73 @@ Unused-access and internal-access analysis address other questions and have thei
 
 [Return to Detection: access analysis](01-detection-and-monitoring-study-guide.md#73-sensitive-data-vulnerabilities-and-access-are-separate-risks).
 
+### Roles Sessions And Policy Requests
+
+**Start with an ordinary job:** a reporting program on EC2 must read private S3 files. Putting a permanent access key in its source code would make that key easy to leak and hard to rotate. Instead, assign an appropriate IAM role to the workload and let its SDK obtain temporary credentials.
+
+The role is the reusable identity definition. A **session** is a temporary instance of using that role. Many programs or people can have different sessions of the same role, so a session name is useful investigation context, not a separate policy that automatically grants access.
+
+```text
+Role definition                   Temporary session
+-----------------                 -----------------
+Who may assume it?  -- issuance -> access key ID
+What may it do?                    secret access key
+Which limits apply?               session token + expiry
+                                        |
+                                        v
+                              Signed AWS API request
+```
+
+The secret signs the request; it is not pasted into the resource policy. The session token accompanies requests made with temporary credentials. An SDK can handle these details, but a script using only two of the three credential fields may fail even when the role permissions are correct.
+
+**Read a request as four questions:** Who is calling? Which operation? Which resource? Under what conditions? For example, ReportReader requests `s3:GetObject` on `arn:aws:s3:::example-reports/october.csv` over TLS. Reading the bucket's contents list is a different operation with a different resource ARN.
+
+```text
+Bucket list:   s3:ListBucket -> arn:aws:s3:::example-reports
+Object read:   s3:GetObject  -> arn:aws:s3:::example-reports/*
+Decrypt data:  kms:Decrypt  -> the relevant KMS key ARN
+```
+
+These are permission relationships, not a promise that every read always invokes all three operations. An application that already knows the object key might not list the bucket at all.
+
+**Grant versus limit:** an identity policy may allow reading reports; a boundary restricts what identity policies can grant. A boundary alone never gives the program a read permission. Resource policies introduce other grant paths, so the full guide explains why implicit denies behave differently for direct user/session grants.
+
+**How to troubleshoot:** first identify the real caller with `sts:GetCallerIdentity`. Then distinguish an unsuccessful AssumeRole call from an unsuccessful read after assumption. Changing the read policy will not fix a role's trust policy, and changing trust will not authorize decryption.
+
+[Return to IAM request walkthrough](04-identity-and-access-management-study-guide.md#a-follow-one-request-from-sign-in-to-s3).
+
+### Federation Tokens And Attribute Ownership
+
+**Federation** means AWS or your application accepts identity evidence from a trusted identity provider instead of keeping a separate password for everyone. The trust must be configured: an arbitrary token from an arbitrary website is not sufficient.
+
+For employees, Identity Center can connect workforce identities to AWS accounts and permission sets. For customers, a Cognito user pool can issue a JWT, a signed document carrying claims about the user. A JWT is not the same thing as temporary AWS access keys.
+
+```text
+Identity proof -> validate signature and intended recipient
+               -> validate issuer, expiry and token purpose
+               -> obtain trustworthy user/tenant attributes
+               -> decide whether THIS action is authorized
+```
+
+**Example:** a token says the user belongs to Billing. The API request asks for a Payroll invoice. A valid signature proves the token came from the expected issuer; it does not make the requested invoice appropriate. The backend must check the user-to-resource relationship before reading the invoice.
+
+An identity pool is useful when a customer application genuinely needs temporary AWS credentials. Its roles must be scoped for that customer access. An alternative is to keep all AWS credentials on the API backend and authorize customer requests there.
+
+**Attributes require an owner.** In tag-based access, matching labels are meaningful only if callers cannot freely change those labels. A trusted identity provider might assign `Project=Billing`; the application should not simply accept `Project=Payroll` from a request body.
+
+```text
+Trusted assignment: HR/identity admin -> Project=Billing
+Untrusted request:  customer input    -> Project=Payroll
+                                  X
+                  Do not turn this into an authority claim
+```
+
+When using session tags, check who can pass tags, which keys and values are permitted, and whether tags carry across role chaining. When using resource tags, protect the tagging operations as well as the read operation.
+
+**Example test plan:** Billing can read Billing; Billing cannot read Payroll; a missing Project tag does not create access; Billing cannot change its own authority to Payroll. These negative tests demonstrate isolation more convincingly than one successful read.
+
+[Return to federation](04-identity-and-access-management-study-guide.md#d-choose-the-right-identity-system) or [ABAC and diagnosis](04-identity-and-access-management-study-guide.md#e-use-attributes-and-evidence-to-control-access).
+
 ## 3. Logging And Detection
 
 ### CloudTrail
