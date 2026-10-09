@@ -16,6 +16,338 @@ Use it as a reverse-engineered study path: learn the data-protection patterns th
 
 ---
 
+## Guided Learning Path
+
+Reviewed: 2026-10-09. These lessons build an end-to-end understanding before the existing component reference and revision material. They use original scenarios, not recalled exam questions.
+
+| Reading pass | Learning goal |
+| --- | --- |
+| [A: Follow the data](#a-follow-data-and-keys-through-an-application) | Understand plaintext, ciphertext, data keys, and control ownership |
+| [B: Permission and lifetime](#b-authorize-key-use-and-plan-its-lifetime) | Diagnose KMS failures and design rotation/recovery |
+| [C: Each network hop](#c-protect-each-network-hop-and-certificate-lifecycle) | Distinguish private access, encryption, and peer identity |
+| [D: Secrets and exposure](#d-rotate-secrets-without-losing-the-application) | Follow rotation stages and prevent sensitive-data leaks |
+| [E: Retain and recover](#e-prove-that-retained-data-can-be-recovered) | Combine integrity, immutability, lifecycle, and restoration |
+| [F: Scenario workshop](#f-data-protection-scenario-workshop) | Explain choices under conflicting constraints |
+
+## A. Follow Data And Keys Through An Application
+
+### Protect Different Things With Different Controls
+
+Imagine a payroll application storing an employee report. **Confidentiality** means unauthorized people cannot read it. **Integrity** means unauthorized changes are prevented or detected. **Availability** means authorized users can retrieve it when needed.
+
+Encryption supports confidentiality but does not prevent a permitted application from exporting plaintext. Object Lock protects retained object versions from certain changes but does not authorize readers. Backup creates recovery options but does not guarantee a working restore.
+
+```text
+Payroll report
+    |
+    +-- Who may read?       IAM + application authorization
+    +-- Stored unreadably? Encryption + key control
+    +-- Safe on the wire?  TLS + certificate verification
+    +-- Changes detectable? Checksums / signatures / audit
+    +-- Deletion resisted? Retention + immutable versions
+    +-- Recoverable?       Backup + keys + tested restore
+```
+
+Use [encryption from first principles](00-aws-security-foundations-for-beginners.md#encryption-and-key-lifetimes-from-first-principles) if the difference between a key, a certificate, and a password is unclear.
+
+### Envelope Encryption: Two Keys With Different Jobs
+
+A data key encrypts the report. A KMS key protects that data key. This pattern, called [envelope encryption](00-aws-security-foundations-for-beginners.md#envelope-encryption), lets large data be encrypted locally or by an integrated AWS service without sending the whole file to KMS.
+
+```text
+Authorized application -> KMS GenerateDataKey
+                             |
+             +---------------+---------------+
+             v                               v
+      Plaintext data key             Encrypted data key
+             |                               |
+      Encrypt the report                     |
+             |                               |
+             +---- store encrypted report ---+
+                   and encrypted data key
+             |
+      Remove plaintext key from memory when no longer needed
+```
+
+For decryption, the encrypted data key goes to KMS under an authorized request. The returned plaintext data key decrypts the report. Service-managed encryption handles these steps for you; client-side encryption makes your application responsible for them. [KMS envelope-encryption concepts](https://docs.aws.amazon.com/kms/latest/developerguide/concepts.html).
+
+**What is stored together?** Ciphertext and its encrypted data key can be stored together. The plaintext data key must not be written beside them. Losing the KMS key can make the encrypted data key unusable even though the report file still exists.
+
+### Choose Ownership Deliberately
+
+| Need | Starting choice | Responsibility that remains |
+| --- | --- | --- |
+| Simple S3 encryption without customer key administration | SSE-S3 | Bucket/object access and data handling |
+| Key-use policies, audit, lifecycle, cross-account sharing | SSE-KMS with a customer managed key | KMS permissions and key availability |
+| Two layers of server-side encryption for a stated requirement | DSSE-KMS | Access and key controls still apply |
+| Encrypt before the storage service receives data | Client-side encryption | Client keys, metadata, implementation, and recovery |
+| Direct dedicated HSM integration/control | CloudHSM | HSM users, availability, backups, application integration |
+
+A KMS custom key store uses the KMS interface with a different backing arrangement; it is not the same as calling CloudHSM directly. An external key store adds dependencies on an external key manager and its network path. Meeting a custody requirement can increase availability risk. [External key stores](https://docs.aws.amazon.com/kms/latest/developerguide/keystore-external.html).
+
+## B. Authorize Key Use And Plan Its Lifetime
+
+### A KMS Key Is Not Just A Secret Number
+
+A KMS key has identity, policy, state, origin, usage, and key material. A disabled key or one pending deletion may reject cryptographic operations even when IAM allows them. An alias is a name pointing to a key, not replacement key material.
+
+Separate **key administrators** from **key users**. Permission to decrypt does not inherently include permission to delete the key. Conversely, an administrator who can rewrite a key policy may be able to grant themselves use; policy administration is a powerful trust decision.
+
+### Trace A Cross-Account S3 Read
+
+```text
+Account A reporting role
+        |
+        +-- S3 path: caller authorization + B bucket access
+        |
+        +-- KMS path: caller key-use permission + B key policy
+        |
+        +-- Conditions, guardrails, endpoint policy, key state
+        |
+        v
+Encrypted object can be returned as plaintext to authorized app
+```
+
+For direct cross-account KMS use, configure authorization in the key-owning account and in the caller's IAM policy. Cross-account support is operation-specific; granting a management action does not make every KMS API usable across accounts. [Cross-account KMS rules](https://docs.aws.amazon.com/kms/latest/developerguide/key-policy-modifying-external-accounts.html).
+
+**A practical investigation:** determine the actual key on the failed object, not just today's bucket default. Check GetObject permissions, `kms:Decrypt`, relevant key policy/grants, conditions, and key state. Use a customer managed key where cross-account SSE-KMS sharing is required; `aws/s3` does not provide that sharing path.
+
+### Grants And Conditions Are Scoped Delegation
+
+A [KMS grant](00-aws-security-foundations-for-beginners.md#kms-grant) authorizes selected operations for a grantee. Integrated services use grants in workflows such as accessing encrypted resources. Grants are not automatically short-lived just because the workload is temporary; understand retirement/revocation and the service's lifecycle.
+
+`kms:ViaService` can constrain supported KMS use to requests made through a named integrated service. `kms:GrantIsForAWSResource` helps constrain grant creation on behalf of AWS resources. Neither is a generic replacement for the correct principal, actions, resource scope, and service documentation.
+
+Encryption context is additional authenticated information supplied with supported symmetric cryptographic operations. The same required context must accompany decryption. It can bind a ciphertext to a purpose, but is not secret storage: do not put passwords or confidential personal data in it. [AWS encryption-context details](https://docs.aws.amazon.com/kms/latest/developerguide/encrypt_context.html).
+
+```json
+{
+  "application": "payroll",
+  "recordType": "monthly-report"
+}
+```
+
+This is an illustrative context object, not a key policy. An application that encrypts with this context and later omits it can fail decryption even with the correct key. Service integrations choose their own context formats; do not invent a condition value without checking what the service sends.
+
+### Rotation Is Not Re-Encryption Or Revocation
+
+```text
+Rotate material within eligible KMS key
+    -> same logical key identity
+    -> new encryptions use current material
+    -> older material remains available for old ciphertext
+
+Replace key / change alias
+    -> future callers may use a different key
+    -> old ciphertext still needs its original key
+
+Re-encrypt existing data
+    -> explicit data-processing/migration operation
+```
+
+An alias switch does not rewrite old objects. Rotation does not remove a compromised principal's permission, rotate a leaked database password, or destroy every old plaintext copy. Address the actual incident mechanism. [KMS rotation behavior](https://docs.aws.amazon.com/kms/latest/developerguide/rotate-keys.html).
+
+### Imported Material And Regional Recovery
+
+Imported material meets a customer-generation requirement, but the customer must retain recoverable copies and manage expiration. **Current correction:** eligible symmetric encryption keys with imported material support on-demand rotation after new material is imported. They do not support automatic rotation. Asymmetric/HMAC keys and custom key stores have different rotation constraints. [On-demand support](https://docs.aws.amazon.com/kms/latest/developerguide/rotating-keys-on-demand.html).
+
+Do not discard old imported material merely because new material is current. Expiration or deletion of required, permanently associated material can make the entire key unavailable; plan reimport and monitor expiration. Reimporting is different from replacing a deleted KMS key with another key of the same name. [Imported material lifecycle](https://docs.aws.amazon.com/kms/latest/developerguide/import-keys-protect.html).
+
+Multi-Region keys provide related keys, not a replicated application. Policies, grants, aliases, and enabled state need Regional configuration. Data, application configuration, and network access must also exist in the recovery Region. For imported multi-Region material, import the required material into each related key; do not assume KMS distributes the customer's bytes for you.
+
+## C. Protect Each Network Hop And Certificate Lifecycle
+
+### Private Is Not The Same As Encrypted
+
+A VPC endpoint offers a private service-access path. TLS encrypts a connection and supports peer authentication. IAM authorizes the request. These solve different problems; a private path is not permission to the data and is not proof of application-level encryption.
+
+```text
+Browser -- TLS #1 --> load balancer -- TLS #2 --> application
+                                             -- TLS #3 --> database
+```
+
+Each numbered connection has its own settings. Enabling HTTPS on the load balancer does not automatically encrypt the target connection. A redirect listener can steer browsers to HTTPS; sensitive clients should use HTTPS directly instead of first transmitting secrets over HTTP.
+
+Check listener security policies, target protocols, client trust, certificate names, expiry, and supported versions/ciphers. For a database, configure both server-side TLS enforcement and clients that verify the expected certificate authority and hostname. Encryption with verification disabled leaves an identity gap.
+
+### Certificates Prove An Identity Relationship
+
+[ACM](00-aws-security-foundations-for-beginners.md#acm) manages certificates for supported uses. A certificate connects a public key with an identity, signed by a trusted issuer. The corresponding private key must remain protected. [AWS Private CA](00-aws-security-foundations-for-beginners.md#aws-private-ca) issues certificates for a private trust system; clients must trust that system.
+
+In mutual TLS, the client also presents a certificate. Passing mTLS proves a trusted client-certificate relationship; application authorization may still need to check which operations that client can perform.
+
+**Current ACM distinction:** exportable public certificates can be requested for use outside integrated AWS services. Export is not a feature of every old/non-exportable certificate. After renewal, externally installed certificates must be exported and deployed again; managed renewal is not automatic installation on every server. [ACM exportable certificates](https://docs.aws.amazon.com/acm/latest/userguide/acm-exportable-certificates.html).
+
+### Encryption Between Compute Resources
+
+Check the actual data path in EMR, EKS, and SageMaker AI. Encrypting S3 inputs does not establish encryption for worker-to-worker traffic, local storage, or application pod connections. Use the service's supported inter-node settings and application TLS/service-mesh controls as appropriate.
+
+Nitro encryption applies to supported instance/network paths; it is not a universal replacement for authenticated TLS across proxies, load balancers, and every instance type. For PrivateLink, Client VPN, or Verified Access, separately reason about private reachability, user/device access, and encryption termination. See the [packet-path foundation](00-aws-security-foundations-for-beginners.md#packet-paths-and-inspection-basics).
+
+## D. Rotate Secrets Without Losing The Application
+
+### Secrets Have Two Places To Stay Consistent
+
+A database password exists in the database's authentication state and in the value retrieved by the application. Updating only one breaks new connections. [Secrets Manager](00-aws-security-foundations-for-beginners.md#secrets-manager) stores versions and supports managed rotation or Lambda-based rotation for appropriate use cases.
+
+```text
+createSecret -> store candidate version (AWSPENDING)
+setSecret    -> update the target database/service
+testSecret   -> verify the candidate actually works
+finishSecret -> promote current version (AWSCURRENT)
+```
+
+The stages describe a coordinated workflow, not an atomic transaction across AWS and the database. Retries must recognize the same version/request and avoid creating inconsistent credentials. The function also needs to verify it is modifying the intended host/account, not a target substituted in a secret. [Rotation stages](https://docs.aws.amazon.com/secretsmanager/latest/userguide/rotate-secrets_lambda-functions.html).
+
+### Diagnose The Stage That Failed
+
+| Observation | Start checking |
+| --- | --- |
+| Function not invoked | Rotation schedule/configuration and invoke permission |
+| Cannot read/write secret | Function role, resource policy, KMS, endpoint access |
+| Database connection times out | DNS, subnet routing, security groups, database availability |
+| Candidate login rejected | Target update, user privileges, candidate contents |
+| New logins fail after promotion | App cache refresh, target consistency, connection strategy |
+
+An interface endpoint to Secrets Manager does not provide connectivity to the database. A function needs both paths. Never debug by writing the full secret into CloudWatch logs. [Rotation troubleshooting](https://docs.aws.amazon.com/secretsmanager/latest/userguide/troubleshoot_rotation.html).
+
+Single-user rotation changes one user's password; alternating-user strategies can reduce interruption but require additional privileges and careful consistency. Cache secrets deliberately with refresh/retry behavior rather than retrieving once at startup forever. A successful rotation test should include a fresh application connection, not just an existing pooled connection.
+
+### Reduce Exposure Before Masking It
+
+Use [Macie](00-aws-security-foundations-for-beginners.md#macie) to discover supported sensitive data in S3; classification does not remove data or fix permissions automatically. Establish who owns the finding and whether the response is access restriction, relocation, deletion, or an approved exception.
+
+CloudWatch Logs data protection and SNS data protection can mask or act on detected sensitive data in their supported workflows. Masking is not erasure, and privileged unmask access must be controlled. Prevent applications from logging secrets in the first place; then test identifiers, supported destinations, and authorized/unprivileged views.
+
+## E. Prove That Retained Data Can Be Recovered
+
+### Version Protection And Readability Are Separate
+
+[S3 Object Lock](00-aws-security-foundations-for-beginners.md#s3-object-lock) protects object versions. Governance mode allows authorized bypass; compliance-mode retention cannot be shortened using ordinary administrative power. A legal hold has no automatic end date and remains until an authorized action removes it.
+
+A new version or delete marker can affect what a normal read sees without deleting the retained version. Retrieve the appropriate version when verifying evidence. Retention also does not preserve a KMS key automatically: an immutable encrypted object can become unreadable if its key is lost. [Object Lock mechanics](https://docs.aws.amazon.com/AmazonS3/latest/userguide/object-lock.html).
+
+### Lifecycle Is Not A Backup
+
+S3 Lifecycle can transition or expire eligible versions according to rules; retention constraints still apply. EFS Lifecycle can move eligible files between storage classes, but moving a file does not create an independent recovery copy.
+
+FSx for Lustre backups support persistent file systems that are not linked to an S3 data repository. Scratch file systems are temporary and do not support these backups; an S3-linked design must protect the authoritative repository appropriately instead of assuming a file-system backup captures the whole dataset. [FSx for Lustre backup scope](https://docs.aws.amazon.com/fsx/latest/LustreGuide/using-backups-fsx.html).
+
+AWS Backup coordinates supported resource backups and copies. Data Lifecycle Manager automates supported EC2/EBS image/snapshot lifecycle. DataSync transfers data and supports integrity verification in configured tasks; copying a corrupted or maliciously changed file does not make that file a trustworthy backup.
+
+```text
+Source -> protected recovery copy -> isolated restore
+          |                           |
+          +-- retention/ownership      +-- keys and permissions
+          +-- separate failure scope  +-- application consistency
+          +-- protected key lifetime  +-- measured RPO/RTO
+```
+
+Backup Vault Lock adds retention controls. Compliance mode has a grace period before the lock becomes immutable; validate retention and costs before that ends. A completed backup job is not proof of a completed restore. [Vault Lock](https://docs.aws.amazon.com/aws-backup/latest/devguide/vault-lock.html).
+
+For cross-account/Region copies, check supported resource types, source/destination permissions, encryption keys, copy-job status, and restore-role permissions. Multi-Region keys alone do not copy backups. A disaster exercise should prove access when the source account or Region is unavailable.
+
+### Integrity Evidence Needs A Trusted Reference
+
+A checksum detects a difference only when compared against a trustworthy reference. A digital signature additionally ties content to a signing key, if the verifier trusts that key and validates the signature. Encrypting a deployment package is not the same as verifying its publisher.
+
+Use code-signing controls for supported deployment workflows, file validation where applicable, and protected audit evidence. S3 Glacier Vault Lock applies to vault policies for that archive model; it is not another name for S3 Object Lock or Backup Vault Lock.
+
+## F. Data Protection Scenario Workshop
+
+### Workshop 1: The Bucket Default Changed
+
+**Situation:** A shared reporting bucket now defaults to a customer managed KMS key. New objects can be read by a partner account; older objects still fail. The partner has the intended S3 access and permission to use the new key.
+
+**Decision:** Which next step best fits the evidence?
+
+- A. Inspect old objects' encryption metadata and arrange authorized migration or access to their original key.
+- B. Change the default key again and assume old objects are rewritten.
+- C. Make the bucket public to avoid KMS checks.
+
+**Answer: A.** A default affects new writes, not an automatic rewrite of all existing ciphertext. B repeats the misunderstanding. C violates access requirements and does not solve decryption. Verify old and new objects separately after any migration.
+
+### Workshop 2: Private Rotation Still Times Out
+
+**Situation:** A Lambda rotation function reads a secret through an interface endpoint and creates AWSPENDING. It times out connecting to the private database. The database password has not changed.
+
+**Decision:** What should be investigated first?
+
+- A. Database network reachability, DNS, security groups, and target port.
+- B. Additional KMS decrypt permissions for every key in the account.
+- C. Promote AWSPENDING immediately so applications retry it.
+
+**Answer: A.** Secret retrieval and candidate creation worked; the failing handoff is the target connection. B broadens unrelated permissions. C promotes an untested value that the database does not accept. Preserve stage/version evidence and retry after fixing the actual path.
+
+### Workshop 3: Imported Key Recovery
+
+**Situation:** A company imports symmetric key material to meet a custody requirement. Associated material expires, cryptographic calls fail, and ciphertext remains intact. The original material is retained securely outside AWS.
+
+**Decision:** Which recovery action is appropriate?
+
+- A. Reimport the required same material into the existing key using the supported process.
+- B. Create a new key with the same alias and random replacement material.
+- C. Enable automatic rotation to recreate the expired material.
+
+**Answer: A.** Reimport can restore the missing dependency. B does not recreate the key/material relationship needed by existing ciphertext. C neither recovers the original bytes nor supplies an automatic-rotation feature for imported keys. Verify every required associated material and test old ciphertext afterward.
+
+### Workshop 4: HTTPS Is Only Half Configured
+
+**Situation:** A load balancer accepts HTTPS from users, forwards HTTP to EC2, and the application connects to the database without enforced TLS. A requirement says sensitive data must be encrypted on every network hop.
+
+**Decision:** Choose the complete design.
+
+- A. Keep the public HTTPS listener and rely on private subnet placement for everything else.
+- B. Configure supported encrypted target and database connections, certificate/trust settings, and enforcement on each hop.
+- C. Enable EBS encryption only.
+
+**Answer: B.** The requirement covers data moving between systems. A provides reachability isolation but leaves plaintext hops. C protects stored volume data, not these connections. Validate each negotiated connection; do not infer it from a padlock in the browser.
+
+### Workshop 5: Immutable But Unreadable
+
+**Situation:** Compliance-mode Object Lock retains evidence for several years. An administrator schedules the encryption key for deletion. The security team argues that Object Lock guarantees recoverability.
+
+**Decision:** Which two concerns must be addressed?
+
+- A. Protect the key lifecycle and cancel an unintended pending deletion while possible.
+- B. Test retrieval and decryption of retained versions using recovery identities.
+- C. Ignore key state because retention overrides KMS.
+
+**Answer: A and B.** Retention protects the version, not every dependency needed to read it. C confuses immutability with cryptographic availability. Monitoring key administration and tested recovery should be part of the retention design.
+
+### Workshop 6: Encryption-Header Requirement
+
+**Situation:** A bucket defaults to an approved KMS key. One policy requirement merely says every object must be encrypted with that key; another explicitly requires callers to name the key in each upload request. The team wants one unexplained deny statement for both cases.
+
+**Decision:** What distinction should drive the policy?
+
+- A. Missing encryption headers can legitimately invoke default encryption, but a request-header mandate deliberately rejects them.
+- B. Default encryption disables all bucket-policy denies.
+- C. Headers and the resulting encryption key are always equivalent evidence.
+
+**Answer: A.** Define whether the control concerns the submitted request or the resulting stored object. B is false because an applicable deny still wins. C overlooks default behavior. Test no header, approved full key ARN, alternate key, and service-produced uploads before rollout.
+
+## G. Data Protection Readiness And Objective Map
+
+| Official skill | Teaching and application |
+| --- | --- |
+| 5.1.1 Required transit encryption | C/F4; listener, target, database, and client enforcement |
+| 5.1.2 Secure/private access | C; endpoint/VPN/Verified Access versus TLS and IAM |
+| 5.1.3 Inter-resource encryption | C and reference 16/23.4; worker and ML data paths |
+| 5.2.1 At-rest encryption choices | A/B/F1; key custody, server/client encryption, HSM |
+| 5.2.2 Integrity controls | E/F5 and reference 23.3; versions, locks, signing, validation |
+| 5.2.3 Lifecycle and retention | E; S3/EFS/FSx distinctions and lock constraints |
+| 5.2.4 Replication and backups | E/F5; permissions, keys, DataSync, DLM, recovery testing |
+| 5.3.1 Secrets lifecycle | D/F2; staged rotation and target consistency |
+| 5.3.2 Imported material and external stores | A/B/F3; custody, availability, reimport |
+| 5.3.3 Imported versus generated | B and corrected reference 8; origin-specific rotation |
+| 5.3.4 Masking | D and reference 14; discovery, prevention, and unmask permission |
+| 5.3.5 Keys and certificates across Regions | B/C; related keys, independent configuration, renewal |
+
+The [official Domain 5 guide](https://docs.aws.amazon.com/aws-certification/latest/security-specialty-03/security-specialty-03-domain5.html) defines the baseline. Explain where plaintext exists, who may obtain it, which keys must survive, and how you would prove recovery. Those answers are more useful than memorizing "use encryption."
+
+---
+
 ## 0. AWS Component Primer: What Each Service Does First
 
 This section explains the AWS components in simple words before going into exam decision rules.
@@ -430,7 +762,7 @@ Important details:
 
 - You are responsible for retaining original key material.
 - If imported key material expires or is deleted, ciphertext can become unusable until matching material is reimported.
-- Imported key material rotation is more manual than AWS-generated key material.
+- Eligible symmetric keys with imported material support on-demand rotation after new material is imported; automatic rotation is not supported. See [the detailed lifecycle lesson](#b-authorize-key-use-and-plan-its-lifetime).
 - For multi-Region keys with imported material, key material must be imported into each replica.
 
 Trap:
@@ -1332,7 +1664,8 @@ Best for:
 | Feature | AWS-generated key material | Imported key material |
 |---|---|---|
 | Who generates material | AWS KMS | Customer |
-| Automatic rotation | Supported for eligible keys | More manual/customer-managed |
+| Automatic rotation | Supported for eligible symmetric encryption keys | Not supported |
+| On-demand material rotation | Supported for eligible symmetric encryption keys | Supported for eligible symmetric encryption keys after new material import |
 | Customer must retain original | No | Yes |
 | Can expire material | No typical imported-expiration pattern | Yes |
 | Reimport responsibility | No | Customer |

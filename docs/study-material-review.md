@@ -19,7 +19,7 @@ The initial review inspected the structure, foundation links, representative tea
 | 02 Incident Response | Detailed expansion complete | Guided lessons, six scenario workshops, nine-skill map, evidence/response foundations; reader refinements remain welcome |
 | 03 Infrastructure Security | Detailed expansion complete | Packet-path lessons, six workshops, objective map, private/edge/device foundations and service-lifecycle corrections |
 | 04 IAM | Detailed expansion complete | Request-path teaching, six workshops, eight-skill map, federation foundations, corrected S3 ABAC and resource-policy exceptions |
-| 05 Data Protection | Preliminary review only | Teach encryption/key lifecycle, cross-account KMS/S3 decisions, rotation and restore/decryption failures |
+| 05 Data Protection | Detailed expansion complete | Data/key teaching path, six workshops, twelve-skill map, certificate/secret foundations, current imported-key rotation and ACM distinctions |
 | 06 Governance | Preliminary review only | Explain policy inheritance/scope, enrollment, control implementation, drift/remediation and audit-evidence limits |
 
 ## Findings From The Initial Review

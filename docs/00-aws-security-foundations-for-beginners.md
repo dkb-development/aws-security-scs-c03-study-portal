@@ -1685,7 +1685,7 @@ For KMS access, check both:
 
 ### KMS Grant
 
-A KMS grant is a temporary or service-mediated permission to use a KMS key.
+A KMS grant delegates selected key operations to a grantee, often for a service-mediated workflow. It does not necessarily expire automatically; plan retirement or revocation when the grant is no longer needed.
 
 AWS services often use grants so they can encrypt or decrypt on your behalf.
 
@@ -1930,6 +1930,94 @@ Use it when:
 Backup Vault Lock applies WORM-style controls to backup vaults.
 
 Use it when backups must be protected from deletion or retention reduction.
+
+### Encryption And Key Lifetimes From First Principles
+
+**Plaintext** is readable data, such as a payroll CSV. **Ciphertext** is the encrypted form. A cryptographic key is material used by the encryption/decryption algorithm; it is not the same as the IAM permission that allows someone to request decryption.
+
+An AWS access key authenticates API requests. A KMS encryption key protects data. A database password authenticates to a database. All are sensitive in different ways, but rotating one does not automatically rotate the others.
+
+```text
+IAM credentials -> prove which AWS caller sent the request
+IAM/KMS policy  -> decide whether that caller may decrypt
+KMS key         -> cryptographic dependency for decryption
+Database secret -> separate login to the database
+```
+
+**Example:** a Lambda role may read a secret from Secrets Manager. That secret contains a database password. The role needs AWS permission to retrieve it; the database separately checks whether the password is correct. A successful AWS API call does not prove a successful database login.
+
+#### Encryption At Rest Versus In Transit
+
+At-rest encryption protects stored representations. In-transit encryption protects data moving across a connection. Neither prevents an authorized program from reading plaintext after decryption. Protect that program's identity, logs, memory handling, and export paths too.
+
+```text
+S3 encrypted object -- TLS --> authorized application
+                                      |
+                                      v
+                              plaintext used in memory
+                                      |
+                         do not write secrets to logs
+```
+
+**Envelope example:** the application obtains a data key, encrypts a report with it, and stores the encrypted data key alongside the encrypted report. To read later, it asks KMS to decrypt the data key. The top-level KMS key remains a separate dependency; backing up only the report is insufficient.
+
+For server-side encryption, the AWS service performs the encryption work. For client-side encryption, your code or a suitable SDK does it before upload. Choose based on the trust boundary, not the assumption that one word always means "more secure."
+
+#### Rotation, Deletion, And Recovery
+
+Rotation changes material used for new encryption under an eligible key while preserving the ability to decrypt old ciphertext. Re-encryption processes old data again. Deletion removes a dependency and can make data unrecoverable. These are three different operations.
+
+```text
+Old report -> old encrypted data key -> original KMS key
+New report -> new encrypted data key -> configured current key
+
+Changing an alias does not reconnect the old report to a new key.
+```
+
+With imported material, keep protected, recoverable copies outside KMS and monitor expiration. Eligible symmetric imported keys support on-demand rotation after new material import, but not automatic rotation. Do not discard previously associated material just because it is no longer current.
+
+**Recovery drill:** read an old encrypted object using the intended recovery role. Confirm its key, key policy, state, Region, and any required context. Repeat after a permission change or migration. A green storage-backup result does not prove these dependencies survived.
+
+[Return to the data/key walkthrough](05-data-protection-study-guide.md#a-follow-data-and-keys-through-an-application) or [key lifetime lesson](05-data-protection-study-guide.md#b-authorize-key-use-and-plan-its-lifetime).
+
+### Certificates Secrets And Recovery Explained
+
+A certificate is a signed statement connecting an identity, such as a server name, to a public key. The server has a corresponding private key. A client checks the issuer it trusts, the expected name, validity, and the connection's proof of private-key possession.
+
+```text
+Client expects api.example.com
+   |
+   +-- certificate names api.example.com?
+   +-- issuer chain trusted?
+   +-- certificate currently valid?
+   +-- peer proves possession of matching private key?
+   |
+   v
+Encrypted, authenticated TLS connection when checks succeed
+```
+
+A private CA establishes an internal issuer, but devices must trust it. Simply issuing an internal certificate does not update every laptop's trust store. Mutual TLS adds client-certificate verification; the application still decides what the authenticated client may do.
+
+ACM renewal and certificate installation are separate lifecycle steps outside managed integrations. For exportable certificates installed on your own servers, automate re-export/deployment after renewal and verify the served certificate. Do not assume an updated ACM record proves every endpoint changed.
+
+#### Why Secret Rotation Has Stages
+
+Suppose a database currently accepts password A. Writing password B into Secrets Manager without updating the database causes failures. Updating the database but leaving applications permanently cached on A also causes failures.
+
+```text
+Prepare B -> database accepts B -> test B -> publish B as current
+                                          |
+                                          v
+                              applications refresh and reconnect
+```
+
+A pending version represents work in progress, not a value that applications should automatically prefer. A retry should continue the same rotation safely. Record stage and request identifiers, not passwords, when investigating a failure.
+
+**Recovery versus retention:** retention tells you how long a protected version must remain. Recovery asks whether you can use it. A retained database backup still needs keys, a restore role, a supported target, and a working application configuration.
+
+Try an isolated restore before declaring success. Check that the right version is restored, fresh connections succeed, required records exist, and the result meets the recovery-time and data-loss objectives.
+
+[Return to network encryption](05-data-protection-study-guide.md#c-protect-each-network-hop-and-certificate-lifecycle), [secret rotation](05-data-protection-study-guide.md#d-rotate-secrets-without-losing-the-application), or [retention and recovery](05-data-protection-study-guide.md#e-prove-that-retained-data-can-be-recovered).
 
 ## 6. Incident Response And Automation
 
