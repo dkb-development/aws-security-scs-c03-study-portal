@@ -16,6 +16,345 @@ Use it as a reverse-engineered study path: learn the incident response patterns 
 
 ---
 
+## Guided Learning Path
+
+Reviewed: 2026-10-09. Read these lessons first, then use the component reference and additional scenarios below. The official objectives require planning, testing, evidence handling, containment, recovery, and root-cause analysis, not just naming response services.
+
+**Pass 1: Prepare and decide**
+
+- [A. Prepare before an incident](#a-prepare-before-an-incident)
+- [B. Triage and choose containment](#b-triage-and-choose-containment)
+
+**Pass 2: Preserve and investigate**
+
+- [C. Collect evidence without destroying it](#c-collect-evidence-without-destroying-it)
+- [D. Respond to identity and data incidents](#d-respond-to-identity-and-data-incidents)
+
+**Pass 3: Automate and recover**
+
+- [E. Build a reliable response workflow](#e-build-a-reliable-response-workflow)
+- [F. Recover and test readiness](#f-recover-and-test-readiness)
+- [G. Scenario workshop](#g-scenario-workshop)
+
+## A. Prepare Before An Incident
+
+### A Plan Is A Decision System
+
+A response plan identifies who leads, who can approve interruption, how teams communicate, and when to escalate. A runbook is the concrete procedure for a particular event. A good runbook says what to check before an action and how to verify it afterward.
+
+For a payments service, the incident commander may authorize taking one worker out of service, while a wider payment shutdown needs a business owner. Decide this before the outage; a Lambda function cannot invent the organization's risk tolerance.
+
+```text
+Plan: authority + communication + escalation
+                         |
+                         v
+Runbook: conditions -> steps -> evidence -> verification
+                         |
+                         v
+Exercise: prove the people AND permissions can execute it
+```
+
+Pre-provision a tightly controlled [responder role](00-aws-security-foundations-for-beginners.md#response-access-and-evidence-basics), approved forensic tools, a restricted evidence location, and access to necessary encryption keys. Test these across the accounts and Regions in scope. An unused role that cannot decrypt snapshots is not forensic readiness.
+
+Use monitored emergency access with a documented approval route. Make it usable when the normal identity provider or affected workload is unavailable. Keep credentials controlled and time-bound where possible; an emergency is not a reason to share an untracked administrator account.
+
+### Know What Support Tools Actually Provide
+
+Systems Manager OpsCenter organizes operational work items. Automation runs procedures; Step Functions coordinates steps and branches. AWS Security Incident Response adds managed security response support under its configured permissions and engagement model. It does not remove your responsibility for workload decisions or evidence retention.
+
+**Current availability:** Systems Manager Incident Manager stopped accepting new customers on November 7, 2025. Existing enabled accounts can continue using it. Treat references below as existing-customer scenarios, not a universal recommendation for a new deployment. [AWS notice](https://docs.aws.amazon.com/incident-manager/latest/userguide/incident-manager-availability-change.html).
+
+## B. Triage And Choose Containment
+
+### Validate The Finding And Establish Scope
+
+Start with the account, Region, resource, time, finding type, and observed behavior. Compare approved changes and workload ownership. Severity is a prioritization signal; it does not establish business impact by itself.
+
+Correlate the suspicious role session with CloudTrail, application request identifiers, and network evidence. Expand scope to other sessions, resources, Regions, and actions. A single affected instance can be the entry point for an account-level compromise.
+
+```text
+Suspicious finding
+     |
+     +-- Expected activity? --> Document evidence and tune narrowly
+     |
+     +-- Credible threat? --> Identify affected identities/resources
+                                  |
+                                  v
+                           Limit ongoing damage
+```
+
+### Network Isolation Has Limits
+
+A [quarantine security group](00-aws-security-foundations-for-beginners.md#ec2-quarantine) restricts network access. Replace all relevant group attachments; adding a restrictive group alongside an existing permissive one does not subtract that group's allows. Preserve only the explicitly required investigation path.
+
+Existing tracked connections may survive security-group changes. If the requirement is immediate interruption of an established connection, consider an appropriately scoped stateless network control and its effect on the whole subnet. Verify actual traffic cessation rather than treating a successful configuration API call as proof.
+
+[Connection tracking](https://docs.aws.amazon.com/AWSEC2/latest/UserGuide/security-group-connection-tracking.html) explains why the common "attach quarantine group and you are done" shortcut is incomplete.
+
+Network isolation also does not invalidate credentials already copied elsewhere. Containment often needs two parallel actions:
+
+```text
+Compromised workload
+       |
+       +-- Network path --> Limit communications
+       |
+       +-- Identity path --> Block stolen permissions / renewal
+```
+
+Check Auto Scaling, load balancers, and orchestration before acting. Automatic replacement might destroy evidence or launch the same vulnerable image. Coordinate capacity and service continuity while preserving the affected resource according to the runbook.
+
+### Containment And Evidence Are A Tradeoff
+
+There is no universal order that says memory must always be collected before containment, or the reverse. Active destruction may require immediate containment. A controlled investigation may preserve volatile evidence while maintaining a narrowly approved collection path.
+
+State the tradeoff, authorize it, and record the decision. Never interpret an illustrative lifecycle as permission to leave active exfiltration running merely to complete a checklist. [AWS containment guidance](https://docs.aws.amazon.com/security-ir/latest/userguide/contain.html).
+
+## C. Collect Evidence Without Destroying It
+
+### Disk And Memory Answer Different Questions
+
+An [EBS snapshot](00-aws-security-foundations-for-beginners.md#ebs-snapshot-and-ami) preserves volume data, not RAM, live connections, or all instance-store contents. Rebooting or stopping can destroy volatile evidence. A running snapshot can also require application-consistency considerations when several files or volumes form one logical dataset.
+
+| Evidence | Useful for | Limitation |
+| --- | --- | --- |
+| Memory acquisition | Running processes, in-memory artifacts | Collection changes the live system; tools must be prepared |
+| EBS snapshots | Disk investigation | Not a memory image |
+| CloudTrail | Supported API actions and identities | Only collected, retained categories are available |
+| Application logs | User/request context | May be altered on a compromised host |
+| Network/DNS evidence | Communication patterns | Not proof of payload contents |
+
+### Preserve Originals And Analyze Copies
+
+Record who collected the artifact, its source, collection time, method, destination, and access history. Hash exported artifacts to detect later changes. Hashing is tamper evidence, not a substitute for proving the collection method or preserving provenance.
+
+```text
+Source --> Acquisition --> Restricted original evidence
+                                  |
+                                  +--> Verified analysis copy
+                                                |
+                                                v
+                                      Isolated forensic tools
+```
+
+Use a separate forensic environment with restricted outbound access. Do not attach an untrusted disk to an ordinary administrator workstation or boot it with production credentials. Analysis tools can themselves encounter malicious content.
+
+For cross-account encrypted snapshots, verify both snapshot-sharing/copy permissions and the customer-managed KMS key path. Some encryption configurations cannot be shared as-is. Test acquisition, copying, and decryption before relying on the design during an incident.
+
+S3 Object Lock can protect artifact versions for a retention period. Also preserve decryption capability and restrict evidence readers. An immutable ciphertext object with a deleted key is not usable evidence.
+
+### Orchestrators And Notebooks
+
+Automated Forensics Orchestrator is deployable AWS guidance that coordinates acquisition and analysis; it is not enabled automatically by GuardDuty. Validate its supported workloads, tool prerequisites, roles, collection endpoints, and failure handling. [AWS guidance](https://docs.aws.amazon.com/solutions/automated-forensics-orchestrator-for-amazon-ec2/).
+
+A SageMaker AI notebook can provide a repeatable analysis environment for approved code and evidence queries. Its execution role and network access are security boundaries. Keep raw evidence immutable, record analysis steps, and avoid treating arbitrary notebook output as a verified forensic conclusion.
+
+## D. Respond To Identity And Data Incidents
+
+### Match Containment To Credential Type
+
+| Credential or access path | Immediate consideration | Follow-up |
+| --- | --- | --- |
+| Exposed IAM user access key | Deactivate the compromised key | Investigate use and credentials/sessions derived from it |
+| Stolen temporary role session | Deny permissions for affected older sessions | Stop the attacker obtaining fresh sessions |
+| Compromised workforce identity | Contain at the identity provider and AWS session layers | Verify application/account sessions separately |
+| Public S3 access | Remove the exposure through the relevant policy/access controls | Investigate object access and downstream copies |
+
+[Role-session revocation](00-aws-security-foundations-for-beginners.md#session-tags-and-revoking-role-sessions) uses an explicit deny with an issue-time cutoff. It affects legitimate older sessions for that role too. Changing a trust policy prevents future assumptions through that trust path; it does not by itself cancel already-issued credentials.
+
+```text
+Old credentials ----> Deny before cutoff
+
+Attacker's renewal path ----> Close the source of new credentials
+
+Legitimate application ----> Obtain fresh credentials safely
+```
+
+The existing JSON example later in this guide demonstrates the cutoff. It must be attached to the correct identity and evaluated with the applicable policies. Keep the deny long enough to cover relevant sessions; deleting it prematurely can reopen access before credentials expire.
+
+Identity Center sessions and service-linked roles have special handling; do not assume arbitrary IAM role editing works for both. [IAM revocation behavior](https://docs.aws.amazon.com/IAM/latest/UserGuide/id_roles_use_revoke-sessions.html).
+
+### Investigate Persistence, Not Just The First Key
+
+Search for new users, access keys, role trusts, policies, unusual resources, and changed logging. An attacker may have created a second route. After blocking the original credential, test that unauthorized access has actually stopped and investigate what data may already have left.
+
+For S3 exposure, blocking public access is containment, not retroactive confidentiality. Preserve relevant object-access records and investigate scope. For a malicious uploaded object, quarantine access while preserving evidence; deleting every upload without review can destroy both business data and investigation context.
+
+## E. Build A Reliable Response Workflow
+
+[Step Functions and Automation](00-aws-security-foundations-for-beginners.md#response-automation-and-safe-recovery) separate orchestration from individual actions. Lambda is useful for a small enrichment step; a state machine makes branching, waiting, retries, and failure paths explicit.
+
+```text
+Finding -> Validate account/resource -> Read current state
+                                           |
+                        +------------------+----------------+
+                        |                                   |
+                  Approval needed?                    Preapproved action
+                        |                                   |
+                        +--------------+--------------------+
+                                       v
+                              Contain -> Verify effect
+                                       |
+                          Failure? ----+---- Success?
+                             |                  |
+                        Escalate           Record outcome
+```
+
+Use least-privilege execution roles, permitted account/resource scope, idempotency, and an explicit timeout for human approval. Do not let an untrusted resource tag alone authorize destructive action: the attacker might be able to alter that tag.
+
+A retry should not overwrite the original security-group configuration needed for rollback. Capture pre-action state once, associate it with the incident, and distinguish a duplicate event from an updated finding needing new work.
+
+An API returning success is not sufficient verification. Recheck containment, responder connectivity, evidence delivery, and remaining attack paths. If evidence collection fails, the state machine should surface that failure rather than marking the incident complete.
+
+### Session Manager Is Not Universal Session Recording
+
+Standard Session Manager access can avoid inbound SSH when managed-node prerequisites are satisfied. Its own networking, IAM, and log-destination permissions still need to work after containment.
+
+Session content logging is not available for Session Manager SSH or port-forwarding sessions. CloudTrail control events are not a transcript of commands sent inside an encrypted tunnel. [Session logging limitations](https://docs.aws.amazon.com/systems-manager/latest/userguide/session-manager-logging.html).
+
+## F. Recover And Test Readiness
+
+### Recovery Has A Security Exit Condition
+
+Restore from a known-good source after correcting the entry point, rotating affected secrets, and removing unauthorized access. Test the restored application's behavior and monitoring before reconnecting it to production. Restoring a recent backup can restore the attacker's persistence too.
+
+```text
+Contain --> Understand entry point --> Remove persistence
+                                         |
+                                         v
+                              Rebuild / restore cleanly
+                                         |
+                                         v
+                              Validate security + function
+                                         |
+                                         v
+                               Controlled return to service
+```
+
+An RPO states acceptable data loss; an RTO states acceptable recovery time. They influence backup frequency, restore architecture, and testing. Neither establishes that the backup is clean. See [recovery basics](00-aws-security-foundations-for-beginners.md#response-automation-and-safe-recovery).
+
+### Test People, Permissions, And Technical Controls
+
+A tabletop exercise tests decisions and communication. A controlled technical exercise tests whether roles, acquisition tools, containment, and restoration actually work. FIS runs supported fault experiments; it is not a substitute for every security attack simulation. Resilience Hub assesses resilience against objectives.
+
+ARC can shift traffic or coordinate supported recovery patterns. It does not remove stolen credentials or malware. During an availability incident, verify that the destination has capacity, dependencies, and acceptable replicated state before shifting traffic.
+
+Record detection, acknowledgment, containment, and recovery times. Review failed permissions and unclear ownership, then retest the corrected runbook. Root-cause analysis should explain both the entry point and why preventive/detective controls did not stop or identify it earlier.
+
+## G. Scenario Workshop
+
+### Workshop 1: The Connection Is Still Active
+
+**Situation:** Responders replace an instance's security groups with a restrictive group. The instance is still transmitting through an established connection. The subnet also contains healthy payment workers.
+
+**Decision:** Which response addresses both the technical behavior and the blast radius?
+
+A. Add another restrictive security group and assume its denies override other rules.
+
+B. Recognize connection tracking, select a scoped control that interrupts the flow, assess subnet impact, and verify traffic cessation.
+
+C. Delete the CloudTrail trail to reduce attacker visibility.
+
+**Answer: B.**
+
+- A assumes security groups have deny rules and ignores tracked connections.
+- B addresses the observed behavior without overlooking shared-subnet impact.
+- C removes evidence and does not stop the network path.
+
+### Workshop 2: Revoked Sessions Return
+
+**Situation:** A role's older sessions are denied using an issue-time cutoff. Minutes later, the attacker uses a new session because the compromised workload still obtains credentials.
+
+**Decision:** What was incomplete?
+
+A. The timestamp condition needed to be replaced by an IAM user password change.
+
+B. Session revocation should have been accompanied by containment of the credential source and future assumption path.
+
+C. CloudTrail Insights should have been disabled before revocation.
+
+**Answer: B.**
+
+- The cutoff addresses older sessions; it is not a permanent barrier to legitimate or malicious renewal.
+- A addresses a different credential type. C changes detection, not authorization.
+- Verify both old-session denial and inability to obtain unauthorized new sessions.
+
+### Workshop 3: Snapshot Taken, Memory Lost
+
+**Situation:** An investigator takes EBS snapshots and then reboots an instance. The investigation later needs in-memory malware evidence that was not collected elsewhere.
+
+**Decision:** Can the snapshots restore that evidence?
+
+A. Yes, an EBS snapshot includes all instance RAM.
+
+B. No. Preserve available disk evidence, document the memory loss, and update the runbook to assess volatile acquisition before disruptive actions.
+
+C. Yes, provided the snapshot is copied to another account.
+
+**Answer: B.**
+
+- A confuses disk and memory. C changes storage location, not what was acquired.
+- The appropriate order depends on active threat and acquisition risk; the lesson is deliberate evidence planning, not always delaying containment.
+
+### Workshop 4: A Successful Invocation, Failed Containment
+
+**Situation:** EventBridge invokes a response Lambda. Lambda logs show `AccessDenied` when changing a network interface. The ticket was marked contained as soon as the invocation was accepted.
+
+**Decision:** What must change?
+
+A. Mark containment complete only after action and effect verification; fix the scoped permission and failure path.
+
+B. Give the event source administrator access and leave the workflow unchanged.
+
+C. Treat delivery success as containment because Lambda was reached.
+
+**Answer: A.**
+
+- The execution role, action scope, and verification are the relevant boundaries.
+- B grants excessive access to the wrong layer. C repeats the original mistake.
+
+### Workshop 5: Recovery Ordering
+
+**Situation:** A compromised service has been contained. A recent backup is available, but its infection status is unknown.
+
+**Decision:** Put the following activities in a defensible recovery sequence.
+
+1. Determine a clean restore point and correct the entry point.
+2. Restore in an isolated environment and rotate affected secrets.
+3. Validate application behavior, access controls, and monitoring.
+4. Reintroduce traffic gradually and monitor for recurrence.
+
+**Answer: 1 -> 2 -> 3 -> 4.** Availability alone is not the exit condition. Returning a vulnerable or infected restore directly to production can repeat the incident.
+
+### Workshop 6: Choosing The Right Test
+
+**Situation:** A team wants to validate who approves production isolation and separately prove that encrypted evidence can be analyzed in its forensic account.
+
+**Decision:** Match each requirement to a test.
+
+| Requirement | Test and observable result |
+| --- | --- |
+| Approval and escalation | Tabletop exercise; named decision maker responds within the agreed window |
+| Evidence access | Controlled acquisition/copy/decrypt exercise using the actual responder roles |
+| Recovery objective | Timed restore test with integrity and application checks |
+
+**Reasoning:** A meeting alone does not exercise KMS permissions. A successful restore alone does not test incident communications. Test each requirement at its own boundary.
+
+## Official Objective Coverage
+
+| Skill | Teaching and application |
+| --- | --- |
+| 2.1.1 | A and E: plans, runbooks, analysis environments and workflows |
+| 2.1.2 | A, B and C: access, tools, isolation and evidence readiness |
+| 2.1.3 | F and Workshop 6: exercises with measurable outcomes |
+| 2.1.4 | E and F: automation, verification and recovery coordination |
+| 2.2.1 | C and Workshop 3: acquisition, provenance and storage |
+| 2.2.2 | B and D: identity, API and application correlation |
+| 2.2.3 | B: validation, business impact and scope |
+| 2.2.4 | B, D, F and Workshops 1-5: containment through recovery |
+| 2.2.5 | F: entry point, persistence and control failure analysis |
+
+[Official Domain 2 objectives](https://docs.aws.amazon.com/aws-certification/latest/security-specialty-03/security-specialty-03-domain2.html). The reference and earlier practice below remain useful, but apply the containment, credential, logging, and availability qualifications taught above.
+
 ## 0. AWS Component Primer: What Each Service Does First
 
 This section explains the AWS components in simple words before going into exam decision rules.
@@ -482,6 +821,8 @@ Incident Manager coordinates response. It is not the same thing as GuardDuty det
 ---
 
 ### 0.10 CloudTrail And CloudTrail Lake: Evidence For API Activity
+
+CloudTrail Lake examples assume an existing eligible customer; it closed to new customers on May 31, 2026. Query retained S3 evidence with Athena where appropriate. SQL examples below use illustrative table names, not deployable universal schemas. [Availability](https://docs.aws.amazon.com/awscloudtrail/latest/userguide/cloudtrail-lake-service-availability-change.html).
 
 CloudTrail records AWS API activity. CloudTrail Lake lets you query CloudTrail events with SQL.
 

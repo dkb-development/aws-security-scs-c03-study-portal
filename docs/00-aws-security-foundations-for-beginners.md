@@ -1909,6 +1909,8 @@ Use it for:
 
 ### Session Manager
 
+Standard session logging is different from a tunneled SSH or port-forwarding session: Session Manager does not record session content for those tunnels. [Logging limitations](https://docs.aws.amazon.com/systems-manager/latest/userguide/session-manager-logging.html).
+
 Session Manager gives shell access to instances without opening inbound SSH or RDP.
 
 Benefits:
@@ -1923,6 +1925,8 @@ Exam memory:
 Private EC2 emergency access without opening SSH usually points to Session Manager.
 
 ### EC2 Quarantine
+
+Read [containment tradeoffs](02-incident-response-study-guide.md#b-triage-and-choose-containment) alongside this overview. Security-group changes may leave tracked connections active; network quarantine does not revoke stolen credentials.
 
 A common incident response step is isolating a compromised EC2 instance.
 
@@ -1963,6 +1967,54 @@ Use them for:
 Security note:
 
 Control snapshot sharing and encrypt snapshots when needed.
+
+### Response Access And Evidence Basics
+
+**Why prepare access?** During an incident, the normal administrator may be unavailable or compromised. A responder needs an independently controlled way to inspect resources, collect evidence, and contain damage.
+
+A role's trust policy determines who can assume it. Its permissions determine allowed actions. The evidence bucket and encryption key have separate access controls. Test the whole path: permission to create a snapshot is different from permission to copy or decrypt it.
+
+```text
+Approved responder --> Assume response role
+                              |
+                  +-----------+-----------+
+                  |                       |
+             Inspect/contain        Collect evidence
+                                          |
+                                          v
+                                 Archive policy + key
+```
+
+Acquisition collects an artifact; preservation protects its original form; analysis uses a working copy. Provenance records where evidence came from. Chain of custody documents transfers and access so investigators can explain who controlled it.
+
+Record the source instance/volume, snapshot ID, collection time, operator/runbook identity, and analysis-copy location. For exported files, record a cryptographic hash. Matching hashes support integrity checking; they do not prove the original collection was complete.
+
+Memory is volatile: rebooting can remove it. Disk snapshots preserve volume blocks, not RAM. Plan memory acquisition while balancing the danger of leaving a system running. Suspect files may contain malware: use isolated analysis tools and avoid production credentials.
+
+[Return to Incident Response](02-incident-response-study-guide.md#c-collect-evidence-without-destroying-it).
+
+### Response Automation And Safe Recovery
+
+Orchestration coordinates a sequence. Step Functions can call services, branch, wait for approval, and handle failures. Systems Manager Automation executes defined procedures; Lambda can perform an individual action.
+
+```text
+Validate --> Save original state --> Approval if needed
+                                           |
+                                           v
+                                   Action --> Verify
+                                                |
+                                    Failed? --> Escalate
+```
+
+A runbook defines inputs, scope, permissions, timeout, rollback conditions, and success tests. Use incident/resource identifiers to avoid duplicate actions. A second quarantine invocation must not overwrite saved original security groups with the already-quarantined groups; rollback would then restore the wrong state.
+
+Containment limits harm; eradication removes the entry point and persistence; recovery restores a trusted service. A restored server still accepting the stolen secret is not safely recovered.
+
+RPO is acceptable data loss expressed as time. An RPO of 15 minutes requires sufficiently recent recoverable data; a daily backup alone cannot meet it. RTO is the target time to restore service.
+
+Neither establishes that a backup is clean. Test decryption, integrity, application behavior, access, dependencies, and monitoring in isolation before returning traffic. Define rollback criteria for unexpected behavior.
+
+[Return to Incident Response](02-incident-response-study-guide.md#f-recover-and-test-readiness).
 
 ## 7. Governance And Compliance
 
@@ -2576,6 +2628,8 @@ AWS Security Incident Response helps manage response to incidents.
 ```
 
 ### OpsCenter And Incident Manager
+
+**Availability:** Incident Manager is closed to new customers from November 7, 2025. Existing enabled accounts can continue using it. [AWS notice](https://docs.aws.amazon.com/incident-manager/latest/userguide/incident-manager-availability-change.html).
 
 Both are in the Systems Manager family, but they solve different problems.
 

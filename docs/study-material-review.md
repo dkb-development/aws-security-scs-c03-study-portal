@@ -16,7 +16,7 @@ The initial review inspected the structure, foundation links, representative tea
 | --- | --- | --- |
 | 00 Foundations | Detection services and underlying mechanisms expanded | Expand remaining domains alongside their chapter passes |
 | 01 Detection | Rewritten and checked against all 13 Domain 1 skills | Reader review and refinements |
-| 02 Incident Response | Preliminary review only | Teach containment tradeoffs, temporary sessions, volatile evidence, forensic handling, recovery and automation failure paths |
+| 02 Incident Response | Detailed expansion complete | Guided lessons, six scenario workshops, nine-skill map, evidence/response foundations; reader refinements remain welcome |
 | 03 Infrastructure Security | Preliminary review only | Walk packets through routes, endpoints, stateful/stateless controls, inspection symmetry, DNS and TLS boundaries |
 | 04 IAM | Preliminary review only | Explain policy evaluation with concrete requests, same/cross-account differences, trust/session boundaries and condition-key support |
 | 05 Data Protection | Preliminary review only | Teach encryption/key lifecycle, cross-account KMS/S3 decisions, rotation and restore/decryption failures |
