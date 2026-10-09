@@ -1541,6 +1541,46 @@ Use it when:
 - access should be based on user identity and device posture
 - VPN-style network access is not preferred
 
+### Packet Paths And Inspection Basics
+
+**A network is a sequence of decisions.** DNS chooses an address, routing chooses a next hop, traffic controls permit packets, TLS establishes an encrypted session, and the application authorizes an operation. Success at one layer does not guarantee the next.
+
+```text
+Client temporary port 49152 --> Server service port 443
+Client temporary port 49152 <-- Server service port 443
+```
+
+A security group remembers allowed connections. A NACL checks individual directions against numbered rules. At a server subnet, allowing incoming destination 443 is not enough if outgoing replies to the client's temporary port are blocked.
+
+A route is like a direction sign, not a permission. The more-specific destination route wins. A security-group allow cannot create a missing route; an available route cannot override an API deny.
+
+**An interface endpoint** gives a supported service private addresses inside the VPC. Private DNS makes the normal service hostname resolve to those addresses. The endpoint's group protects its interfaces, and its policy constrains supported API requests through it. IAM/resource policies still apply.
+
+**An inspection endpoint** sees only routed traffic. A stateful firewall needs the appropriate forward and return path. Drawing a firewall beside a VPC does not make it inspect all communication. Explicitly trace each direction through its routes, including failover.
+
+For example, two private application tiers may talk over local routing while internet egress passes through a firewall. An egress control does not automatically inspect that internal east/west traffic.
+
+[Return to Infrastructure](03-infrastructure-security-study-guide.md#a-follow-one-connection).
+
+### Edge Browser And Device Basics
+
+**CORS** is a browser mechanism. A page loaded from one origin may need permission to read responses from another. A preflight asks whether the cross-origin method/headers are acceptable. S3 access permission and browser CORS acceptance are different checks.
+
+```text
+Browser script --> CORS rules allow response use?
+Signed request --> S3 policies allow object operation?
+
+Both can matter. CORS does not grant S3 permissions.
+```
+
+**Origin protection** prevents an attacker from bypassing the front door. If a WAF protects CloudFront but the origin accepts arbitrary direct requests, the unprotected route remains. Restrict the origin using supported mechanisms and verify direct requests are rejected as intended.
+
+**Device policies** are another boundary. An IoT certificate identifies a device, but the attached policy determines what it can do. Permission to connect is not permission to subscribe to every topic or receive every message. Scope the device's topic/client resources and understand the different wildcard syntaxes.
+
+**Model tools** have the same separation. A chatbot response proposing an action is not permission to execute it. The application must authorize the user, scope retrieved data, validate parameters, and restrict the tool's role. Guardrails help filter content; they do not supply tenant isolation by themselves.
+
+[Return to Infrastructure](03-infrastructure-security-study-guide.md#d-protect-the-edge-and-the-origin).
+
 ## 5. Data Protection
 
 ### KMS
@@ -2856,6 +2896,8 @@ Exam trap:
 Do not use Image Builder to patch already-running instances. Use Patch Manager for running fleets.
 
 ### Amazon Q Developer, Code Scanning, And Inspector SBOM
+
+CodeGuru Security support ended November 20, 2025. Historical references explain its scanning role, not availability for new implementations. Use supported pipeline tooling and verify its coverage. [AWS notice](https://docs.aws.amazon.com/cli/latest/reference/codeguru-security/).
 
 These show up in supply-chain and shift-left security questions.
 

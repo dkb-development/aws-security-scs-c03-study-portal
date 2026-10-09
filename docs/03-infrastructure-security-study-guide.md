@@ -17,6 +17,309 @@ Use it as a reverse-engineered study path: learn the infrastructure patterns tha
 
 ---
 
+## Guided Learning Path
+
+Reviewed: 2026-10-09. Begin with these connected lessons, then use the component explanations and additional scenarios below as a reference. A secure infrastructure design must both block unwanted traffic and preserve required application paths.
+
+**Pass 1: Follow the request:** [A. Network path](#a-follow-one-connection), [B. Private access](#b-private-and-hybrid-access).
+
+**Pass 2: Apply controls:** [C. Inspection](#c-route-through-inspection), [D. Edge protection](#d-protect-the-edge-and-the-origin).
+
+**Pass 3: Secure execution:** [E. Compute](#e-secure-the-compute-lifecycle), [F. IoT and GenAI](#f-iot-and-generative-ai-boundaries), [G. Practice](#g-scenario-workshop).
+
+## A. Follow One Connection
+
+### The Forward And Return Paths Both Matter
+
+An EC2 client at `10.0.1.10:49152` calls a server at `10.0.2.20:443`. The client's temporary port is an **ephemeral port**. The response reverses source and destination addresses and ports.
+
+```text
+Request:  10.0.1.10:49152 -----> 10.0.2.20:443
+Response: 10.0.1.10:49152 <----- 10.0.2.20:443
+
+Both directions need a valid route and permitted traffic.
+```
+
+[Security groups](00-aws-security-foundations-for-beginners.md#security-group) are stateful: an allowed tracked connection admits its response without a separate reverse-direction allow. Multiple attached groups combine allows. There is no security-group deny rule that cancels another group's permission.
+
+[Network ACLs](00-aws-security-foundations-for-beginners.md#network-acl) are stateless and evaluated by ascending rule number, stopping at the first match. At the server subnet, an inbound allow for destination 443 needs an appropriate outbound return-port rule. Check the client's subnet too.
+
+**Example:** The server's security group allows the client, but its subnet NACL allows outbound destination 443 only. The return packet is addressed to client port 49152, so the NACL can block it. Widening the security group does not repair that stateless return-path error.
+
+### Routing Does Not Grant Access
+
+A [route table](00-aws-security-foundations-for-beginners.md#route-table) chooses a next hop using the matching destination route, with more-specific prefixes taking precedence. It does not authorize an S3 action, open a port, or validate a certificate.
+
+```text
+Resolve name --> Find route --> Network controls --> TLS --> API policy
+     |              |                |                |        |
+  DNS error      No route         Timeout          Trust     Denied
+                                                   error
+```
+
+A subnet is public because it has a route to an internet gateway; that alone does not make every instance reachable. Public addressing, routing, and traffic controls still matter. A NAT gateway enables supported outbound translation, not arbitrary inbound administration.
+
+Use this [packet-path foundation](00-aws-security-foundations-for-beginners.md#packet-paths-and-inspection-basics) whenever a question combines several controls.
+
+## B. Private And Hybrid Access
+
+### Interface Endpoint: An Address Inside The VPC
+
+An interface endpoint creates private network interfaces for a supported service. With appropriate private DNS, the ordinary service hostname resolves to endpoint addresses. The endpoint security group must admit traffic from the workload; DNS and routing must lead to the intended endpoint.
+
+```text
+App uses service hostname
+          |
+          v
+Private DNS --> Endpoint ENI:443 --> AWS service
+                     |                   |
+                 Network allow     API authorization
+```
+
+An endpoint policy constrains requests through the endpoint when supported. It does not grant permissions that IAM or resource policies lack. Distinguish a timeout from an `AccessDenied` response before changing policies. [Interface endpoint configuration](https://docs.aws.amazon.com/vpc/latest/privatelink/interface-endpoints.html).
+
+Gateway endpoints for S3/DynamoDB instead use route-table associations. Associating the wrong route table leaves the workload using its old path. Do not assume an S3 gateway endpoint can simply be consumed from any on-premises network; choose a supported hybrid access architecture.
+
+### Hybrid Connectivity Has Several Independent Properties
+
+| Requirement | Design dimension |
+| --- | --- |
+| Reach private networks | VPN, Direct Connect and routing architecture |
+| Encrypt traffic | IPsec, supported MACsec, or application TLS as appropriate |
+| Survive link failure | Diverse connectivity and tested failover |
+| Resolve private service names | Deliberate Resolver forwarding/endpoints and DNS routes |
+| Limit application access by identity/device | Verified Access where supported |
+
+Direct Connect is dedicated connectivity, not automatic end-to-end application encryption. MACsec protects the supported link segment; TLS protects the application connection. VPN over Direct Connect may fit an encryption requirement that the bare circuit does not satisfy.
+
+[Transit Gateway](00-aws-security-foundations-for-beginners.md#transit-gateway) connects attachments through its route tables. Association and propagation determine reachable networks. A central hub is not automatically a segmentation boundary: avoid propagating every route into every table if environments must be isolated.
+
+Verified Access evaluates access to supported applications using configured trust and policy context. It is not a substitute for every hybrid routing requirement or the application's own authorization checks.
+
+## C. Route Through Inspection
+
+### A Firewall Sees Only Traffic That Traverses It
+
+Deploying Network Firewall does not change all routes automatically. Route both directions through the intended inspection path, including each required Availability Zone. Stateful inspection depends on seeing the flow consistently.
+
+```text
+Workload --> Firewall endpoint --> Egress path --> Destination
+Workload <-- Same inspection path <------------- Response
+
+Bypass route or asymmetric return path = design problem
+```
+
+Central Transit Gateway inspection may require appliance-mode and routing considerations for the chosen architecture. Avoid copying a single-subnet diagram into a multi-AZ system without checking forward and return paths. [AWS reference architectures](https://docs.aws.amazon.com/network-firewall/latest/developerguide/architectures.html).
+
+Stateless rules examine packets without connection context; stateful rules evaluate supported flow/application context. Rule order and default actions determine which inspection stage receives traffic. A broad pass action can bypass the analysis you intended to apply.
+
+### DNS Filtering And Payload Inspection Are Different
+
+Resolver DNS Firewall evaluates names on the Resolver path. Network Firewall evaluates traffic that reaches its endpoint. A workload using a different DNS route can bypass Resolver-based decisions unless the architecture constrains that route.
+
+Encrypted traffic limits what an inspector can see. Domain filtering based on available names is not a promise to inspect all encrypted HTTP bodies. TLS inspection has certificate/trust and compatibility requirements; choose it deliberately rather than assuming a port-443 rule decrypts traffic.
+
+North/south traffic enters or leaves a network boundary. East/west traffic moves among workloads. An internet egress firewall does not automatically inspect communication between two internal application tiers.
+
+### Verify Reachability And Observed Behavior
+
+Network Access Analyzer identifies potential unwanted paths from network configuration. Inspector network reachability findings help assess exposure. Flow Logs show observed metadata. Traffic Mirroring provides supported packet copies. These answer different questions; a possible route is not proof it was exploited.
+
+## D. Protect The Edge And The Origin
+
+### WAF Rules Have An Evaluation Order
+
+[AWS WAF](00-aws-security-foundations-for-beginners.md#aws-waf) evaluates HTTP requests at supported services. Rules have priorities; terminating actions such as Allow or Block can stop later evaluation. Count is useful when measuring impact before enforcement. [Rule actions](https://docs.aws.amazon.com/waf/latest/developerguide/waf-rule-action.html).
+
+Roll out a managed or third-party rule group by inspecting matches and false positives, scoping exceptions narrowly, and testing the change. Log the rule that decided the request. Disabling all protection because one endpoint has false positives is rarely the least-disruptive fix.
+
+A rate-based rule groups requests using configured keys. If many users sit behind one proxy, grouping by its address may combine them. If you use a forwarded-IP header, establish which trusted hop sets it; a client-controlled header is not trustworthy identity. [Aggregation options](https://docs.aws.amazon.com/waf/latest/developerguide/waf-rule-statement-type-rate-based-aggregation-options.html).
+
+Geolocation and client fingerprinting are signals, not strong authentication. Combine them with appropriate policy and application controls. Rate limiting reduces abuse; it is not a precise billing quota system or guaranteed prevention of every distributed attack.
+
+### Protect The Path Around The WAF
+
+```text
+Viewer --> CloudFront + WAF --> Origin
+                                  ^
+                                  |
+                  Direct-origin access must also be controlled
+```
+
+For an S3 origin, OAC signs supported CloudFront origin requests; constrain the bucket policy to the intended distribution and account for KMS permissions if needed. For an ALB origin, use supported origin restrictions and validate the chosen secret-header/network design.
+
+A CloudFront origin-facing prefix list restricts network sources but does not uniquely identify your distribution. A custom header should be protected and rotated if exposed. Enforce HTTPS on both viewer and origin legs when required.
+
+Shield addresses DDoS protection; WAF addresses HTTP request filtering. Enhanced support/cost-protection requirements point toward the appropriate Shield Advanced configuration, but resource enrollment and response preparation still matter.
+
+### CORS Is A Browser Rule, Not A Permission Grant
+
+[CORS](00-aws-security-foundations-for-beginners.md#edge-browser-and-device-basics) determines whether browser JavaScript may access a cross-origin response. It does not authorize S3 reads or prevent a non-browser client from making an otherwise permitted request.
+
+If a browser fails but an authorized CLI request works, compare the Origin, method, requested headers, preflight response, and CORS configuration. Do not make the bucket public to repair a browser policy mismatch. [S3 CORS troubleshooting](https://docs.aws.amazon.com/AmazonS3/latest/userguide/cors-troubleshooting.html).
+
+For API Gateway mTLS, verify the custom domain, certificate chain/truststore, and unwanted alternative endpoint. Client-certificate validation does not automatically establish application-level permission to every operation.
+
+## E. Secure The Compute Lifecycle
+
+### Build, Deploy, Run, And Reassess
+
+```text
+Code + dependencies --> Scan --> Build hardened image --> Test
+                                                           |
+                                                           v
+                                                        Deploy
+                                                           |
+                                     Patch / monitor / rescan
+```
+
+Image Builder creates repeatable images with hardening and tests. Patch Manager manages eligible running nodes under configured baselines/policies and maintenance arrangements. A patched golden image does not patch existing instances; a patched instance does not update tomorrow's launch image.
+
+Inspector identifies supported vulnerabilities; GuardDuty detects suspicious behavior. An SBOM inventories components, not proof that they are safe. Validate that the deployed image digest/version is the one that passed the pipeline and rescan as vulnerability intelligence changes.
+
+**Availability correction:** CodeGuru Security support ended November 20, 2025. Recognize its historical mention in the exam guide, but use currently supported scanning tools for new implementations. [AWS service notice](https://docs.aws.amazon.com/cli/latest/reference/codeguru-security/).
+
+### Give Each Workload The Correct Identity
+
+An EC2 instance profile delivers an IAM role to the instance. A Lambda execution role authorizes function code. Container task/pod identities should scope application access rather than sharing a broad node role. A deployment actor's permission to pass a role is distinct from what that role can do.
+
+IMDSv2 uses a session-token flow for EC2 metadata and reduces certain SSRF paths; it does not make a compromised application unable to use its legitimate role. Require it where appropriate, test container hop-limit behavior, and apply least privilege to the role.
+
+For administration, Session Manager avoids inbound SSH when prerequisites work. EC2 Instance Connect supplies temporary SSH access mechanisms, with network and OS prerequisites; it is not automatically the same connectivity model as Session Manager. Verify the required audit trail, including tunnel-logging limitations.
+
+## F. IoT And Generative AI Boundaries
+
+### IoT: Connection Is Not Subscription Or Delivery Permission
+
+An IoT device authenticates through its configured identity mechanism. Its IoT policy controls allowed operations. `Connect`, `Publish`, `Subscribe`, and `Receive` answer separate questions.
+
+```text
+Authenticate --> Connect --> Subscribe to filter --> Receive topic
+                              |
+                       Separate permissions
+```
+
+Publish/Receive use topic resources; Subscribe uses topic-filter resources. MQTT `+` and `#` are not the same as IAM-style policy `*` and `?`. A device should not gain another device's topics merely by choosing a different client ID. [IoT examples](https://docs.aws.amazon.com/iot/latest/developerguide/pub-sub-policy.html).
+
+### GenAI: Treat Retrieved Text And Tool Requests As Untrusted
+
+Bedrock Guardrails can evaluate configured input/output risks, including sensitive information and supported prompt-attack filters. Configure and apply the intended version; creating a guardrail does not protect an application path that never invokes it. [Guardrails](https://docs.aws.amazon.com/bedrock/latest/userguide/guardrails.html).
+
+```text
+Authenticated user --> Authorized retrieval --> Model interaction
+                                                 |
+                                      Proposed tool operation
+                                                 |
+                                      Server-side authorization
+                                                 |
+                                      Approved scoped execution
+```
+
+A model-generated instruction is not authorization. Limit retrieval by the user's access rights, validate tool arguments, constrain destinations and actions, and require approval for high-impact operations. Masking an answer does not repair unauthorized retrieval of another tenant's documents.
+
+Keep secrets out of prompts and logs. Validate model outputs before using them as SQL, shell commands, or HTML. Content filtering complements ordinary IAM, network, encryption, and application controls rather than replacing them.
+
+## G. Scenario Workshop
+
+### Workshop 1: HTTPS Works In Only One Direction
+
+**Situation:** The server security group allows HTTPS from the client. Its subnet NACL admits inbound 443 but allows outbound destination 443 only. Client requests time out.
+
+**Decision:** Which change targets the demonstrated gap?
+
+A. Permit the appropriate ephemeral return destination ports in the NACL after checking both subnet paths.
+
+B. Add an inbound 49152 rule to the server's security group.
+
+C. Grant `s3:GetObject` to the client role.
+
+**Answer: A.** The response destination is the client's temporary port. B addresses a different direction/control; C concerns API authorization, not this TCP return path.
+
+### Workshop 2: The Endpoint Exists But Calls Time Out
+
+**Situation:** A private application has an interface endpoint and correct endpoint/IAM policies. Its normal service hostname still resolves to public addresses, and the VPC has no internet egress.
+
+**Decision:** What should be inspected first?
+
+A. The service hostname/private DNS configuration and VPC DNS settings.
+
+B. A broader resource policy allowing all principals.
+
+C. More API permissions on the endpoint.
+
+**Answer: A.** The observed destination is wrong. B/C change authorization after a network path the client is not using. Once DNS is fixed, verify endpoint network access and authorization independently.
+
+### Workshop 3: A WAF Bypass
+
+**Situation:** CloudFront has a web ACL, but the same application is reachable directly through its ALB hostname. Attackers use the direct route.
+
+**Decision:** What completes the design?
+
+A. Lower the CloudFront rate threshold only.
+
+B. Restrict and validate origin access through the intended path, or apply appropriate equivalent controls to every exposed entry point.
+
+C. Add DNS Firewall to the client computers.
+
+**Answer: B.** A changes a path attackers bypass. C does not control arbitrary external clients. Verify requests sent directly to the origin fail under the intended policy.
+
+### Workshop 4: Central Inspection Breaks Connections
+
+**Situation:** Outbound traffic traverses a stateful firewall, but replies take a direct route to the workload. Failures appeared after a routing change.
+
+**Decision:** What is the best investigation?
+
+A. Disable all inspection permanently.
+
+B. Check forward/return route symmetry, endpoint/AZ selection, and relevant Transit Gateway appliance configuration.
+
+C. Replace TLS certificates before inspecting routes.
+
+**Answer: B.** It addresses missing flow context. A sacrifices the requirement; C has no support in the observed routing change. Test both directions after repair.
+
+### Workshop 5: Browser Failure, CLI Success
+
+**Situation:** A signed S3 read works from CLI. Browser JavaScript from the approved website fails preflight because a requested header is absent from AllowedHeaders.
+
+**Decision:** Which change fits?
+
+A. Make all objects public.
+
+B. Adjust the narrow CORS rule for the intended origin, method, and header; retain S3 authorization.
+
+C. Replace the IAM role with AdministratorAccess.
+
+**Answer: B.** The clue identifies browser CORS evaluation. A/C unnecessarily widen access and do not correctly express the browser requirement.
+
+### Workshop 6: A Model Requests Another Tenant's Export
+
+**Situation:** A retrieved document instructs a support assistant to export another tenant's records through a tool. Guardrails are enabled, but the tool role has broad data access.
+
+**Decision:** What control must exist even if filtering misses the instruction?
+
+A. Server-side tenant authorization and scoped tool/data permissions.
+
+B. A longer system prompt alone.
+
+C. A WAF rule that allows every request from authenticated users.
+
+**Answer: A.** Authorization must be enforced outside the model. B is not a security boundary; C does not constrain the internal tool action. Validate the caller's permission on every data operation.
+
+## Official Objective Coverage
+
+| Skills | Teaching and application |
+| --- | --- |
+| 3.1.1-3.1.3 | D: threat-specific edge choices, rule actions, rates, origin protection and browser behavior |
+| 3.1.4 | D plus Detection's Security Lake lessons: third-party rule integration, logs and normalization; verify producer format rather than assuming WAF emits OCSF directly |
+| 3.2.1-3.2.4 | E: image, identity, vulnerability and patch lifecycle |
+| 3.2.5-3.2.6 | E: administration and supported pipeline scanning |
+| 3.2.7 | F and Workshop 6: GenAI filters and independent authorization |
+| 3.3.1 | A, C and Workshops 1/4: packet controls and inspection |
+| 3.3.2-3.3.3 | B: hybrid encryption, routing and identity-aware access |
+| 3.3.4-3.3.5 | B/C: segmentation and reachability evidence |
+
+[Official Domain 3 objectives](https://docs.aws.amazon.com/aws-certification/latest/security-specialty-03/security-specialty-03-domain3.html).
+
 ## 0. AWS Component Primer: What Each Service Does First
 
 This section explains the AWS components in simple words before going into exam decision rules.
